@@ -125,7 +125,7 @@ class SimResult:
 # raw price lookback (deepest is double_bottom's 40 bars) and the largest length
 # guard (55). Window-start-sensitive indicators (EMA_21, VWAP, SMA_200) are
 # precomputed full-history below, so the window only needs to cover raw lookbacks.
-BACKTEST_LOOKBACK = 256
+BACKTEST_LOOKBACK = 128
 
 
 def _precompute_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -552,7 +552,14 @@ def run_training(
         print(f"Phase 3: Bootstrapping to {simulations:,} simulations...")
         all_results = bootstrap_expand(base_results, simulations)
     else:
-        all_results = base_results[:simulations]
+        # The simulation target is a floor (how many to bootstrap up to), not a
+        # cap. When real history already meets it, keep every real setup across
+        # all tickers — discarding real data to hit an exact count would bias
+        # calibration toward whichever tickers finished first and shrink the
+        # per-pattern sample sizes the trust thresholds rely on.
+        print(f"Phase 3: Real setups ({len(base_results):,}) >= target "
+              f"({simulations:,}) — keeping all real, no bootstrap.")
+        all_results = base_results
 
     from agents.quant import summarize_backtest
 

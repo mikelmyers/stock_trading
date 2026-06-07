@@ -13,9 +13,18 @@ def calculate_rsi(df: pd.DataFrame, window: int = 14) -> pd.Series:
 
 
 def calculate_atr(df: pd.DataFrame, window: int = 14) -> pd.Series:
-    high_low = df["High"] - df["Low"]
-    high_close = np.abs(df["High"] - df["Close"].shift())
-    low_close = np.abs(df["Low"] - df["Close"].shift())
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    true_range = ranges.max(axis=1)
-    return true_range.rolling(window=window).mean()
+    # numpy true-range avoids pandas concat + row-wise max, which dominated the
+    # backtest hot loop. Result is identical to the prior concat/.max(axis=1):
+    # np.nanmax mirrors pandas skipna max, so row 0 (no prior close) falls back
+    # to High-Low exactly as before.
+    high = df["High"].to_numpy(dtype="float64")
+    low = df["Low"].to_numpy(dtype="float64")
+    close = df["Close"].to_numpy(dtype="float64")
+    prev_close = np.empty_like(close)
+    prev_close[0] = np.nan
+    prev_close[1:] = close[:-1]
+    true_range = np.nanmax(
+        np.stack([high - low, np.abs(high - prev_close), np.abs(low - prev_close)]),
+        axis=0,
+    )
+    return pd.Series(true_range, index=df.index).rolling(window=window).mean()
