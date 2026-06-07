@@ -1,0 +1,32 @@
+{
+  "patterns": {
+    "breakout": "done",
+    "ma_pullback": "done",
+    "bull_flag": "done",
+    "double_bottom": "done",
+    "mean_reversion": "done",
+    "gap_fill": "done",
+    "vwap_reclaim": "done",
+    "rsi_divergence": "done",
+    "bear_breakdown": "done",
+    "credit_put": "done"
+  },
+  "agents": {
+    "context": "done",
+    "regime": "done",
+    "probability": "done",
+    "quant": "done",
+    "qa": "done",
+    "options_research": "done",
+    "options_backtest": "done",
+    "earnings_filter": "done",
+    "sector_rotation": "done",
+    "portfolio_correlation": "done",
+    "intraday_timing": "done",
+    "margin_compliance": "done"
+  },
+  "training": {
+    "checkpoint_2k_protocol": "done",
+    "final_10k_run": "pending"
+  }
+}

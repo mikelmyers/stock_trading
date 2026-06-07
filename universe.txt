@@ -1,0 +1,7 @@
+# Extra tickers to scan (one per line: TICKER or TICKER,Category)
+# Lines starting with # are ignored.
+
+COIN,Mid Cap
+MARA,Small Cap
+SMCI,Mega/Large Cap
+ARM,Mega/Large Cap

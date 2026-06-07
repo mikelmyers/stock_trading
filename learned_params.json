@@ -1,0 +1,98 @@
+{
+  "min_setup_score": 50,
+  "min_composite_score": 50,
+  "volume_multiplier": 1.5,
+  "compression_ratio": 0.85,
+  "min_ceiling_touches": 2,
+  "min_probability_confidence": "LOW",
+  "expectancy_threshold": 0.104,
+  "trained_on_simulations": 2000,
+  "trained_win_rate": 50.0,
+  "trained_expectancy": 0.003,
+  "enabled_setups": [
+    "breakout",
+    "credit_put",
+    "double_bottom",
+    "gap_fill",
+    "ma_pullback",
+    "rsi_divergence",
+    "vwap_reclaim"
+  ],
+  "setup_performance": {
+    "bear_breakdown": {
+      "real_count": 90,
+      "count": 381,
+      "win_rate": 29.7,
+      "expectancy": -0.39,
+      "enabled": false
+    },
+    "breakout": {
+      "real_count": 5,
+      "count": 23,
+      "win_rate": 60.9,
+      "expectancy": 0.255,
+      "enabled": true
+    },
+    "credit_put": {
+      "real_count": 99,
+      "count": 449,
+      "win_rate": 61.0,
+      "expectancy": 0.078,
+      "enabled": true
+    },
+    "double_bottom": {
+      "real_count": 14,
+      "count": 58,
+      "win_rate": 55.2,
+      "expectancy": 0.073,
+      "enabled": true
+    },
+    "gap_fill": {
+      "real_count": 29,
+      "count": 126,
+      "win_rate": 61.9,
+      "expectancy": 0.368,
+      "enabled": true
+    },
+    "ma_pullback": {
+      "real_count": 97,
+      "count": 407,
+      "win_rate": 53.1,
+      "expectancy": 0.133,
+      "enabled": true
+    },
+    "mean_reversion": {
+      "real_count": 19,
+      "count": 83,
+      "win_rate": 43.4,
+      "expectancy": -0.077,
+      "enabled": false
+    },
+    "rsi_divergence": {
+      "real_count": 98,
+      "count": 426,
+      "win_rate": 49.1,
+      "expectancy": 0.007,
+      "enabled": true
+    },
+    "vwap_reclaim": {
+      "real_count": 11,
+      "count": 47,
+      "win_rate": 57.4,
+      "expectancy": 0.25,
+      "enabled": true
+    }
+  },
+  "options_backtest": {
+    "count": 200,
+    "win_rate": 42.5,
+    "avg_pnl": -25.32,
+    "avg_r": 0.544,
+    "summary": "Options spreads on 200 setups: 42% win, +0.54R avg"
+  },
+  "strong_tickers": [],
+  "score_expectancy_map": {
+    "100": -0.024,
+    "80": 0.117
+  }
+}
