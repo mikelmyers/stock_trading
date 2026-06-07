@@ -11,7 +11,10 @@ def analyze_vwap_reclaim(df: pd.DataFrame) -> dict:
         return empty_setup("vwap_reclaim", "VWAP Reclaim")
 
     df = df.copy()
-    df["VWAP"] = (df["Close"] * df["Volume"]).cumsum() / df["Volume"].cumsum()
+    # Backtests pre-attach a full-history anchored VWAP (cumulative, exact at
+    # each bar); live scans pass a raw window, so compute it on the fly.
+    if "VWAP" not in df.columns:
+        df["VWAP"] = (df["Close"] * df["Volume"]).cumsum() / df["Volume"].cumsum()
     df["SMA_20"] = df["Close"].rolling(20).mean()
 
     close = df["Close"].iloc[-1]

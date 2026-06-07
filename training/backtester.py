@@ -121,13 +121,43 @@ class SimResult:
         return asdict(self)
 
 
+# Trailing window passed to each analyzer per bar. Must exceed every analyzer's
+# raw price lookback (deepest is double_bottom's 40 bars) and the largest length
+# guard (55). Window-start-sensitive indicators (EMA_21, VWAP, SMA_200) are
+# precomputed full-history below, so the window only needs to cover raw lookbacks.
+BACKTEST_LOOKBACK = 256
+
+
+def _precompute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """Attach full-history causal indicators once per ticker.
+
+    Each is causal, so its value at bar ``i`` is identical whether computed over
+    the whole series or over the prefix ``df.iloc[:i+1]``. Pre-attaching them lets
+    the per-bar walk read them from a small trailing window instead of recomputing
+    over a growing prefix — turning O(n^2) setup detection into O(n) with
+    bit-for-bit identical results.
+    """
+    out = df.copy()
+    out["EMA_21"] = out["Close"].ewm(span=21, adjust=False).mean()
+    out["SMA_200"] = out["Close"].rolling(200).mean()
+    out["VWAP"] = (out["Close"] * out["Volume"]).cumsum() / out["Volume"].cumsum()
+    return out
+
+
 def find_historical_setups(
     df: pd.DataFrame, min_forward: int = 15, step: int = 1,
+    lookback: int = BACKTEST_LOOKBACK,
 ) -> list[tuple[int, dict]]:
     """Walk history and return (bar_index, setup) for every valid pattern."""
     found = []
-    for i in range(40, len(df) - min_forward, step):
-        window = df.iloc[: i + 1]
+    ind = _precompute_indicators(df)
+    n = len(ind)
+    for i in range(40, n - min_forward, step):
+        # Bounded trailing window: identical results to df.iloc[:i+1] because
+        # analyzers only read precomputed indicators + raw lookbacks <= 40 bars,
+        # and length guards (<=55) behave the same once the window reaches 256.
+        start = max(0, i - lookback + 1)
+        window = ind.iloc[start : i + 1]
         for _setup_type, analyzer in SETUP_REGISTRY.items():
             setup = analyzer(window)
             if setup["is_valid_setup"]:
@@ -141,6 +171,7 @@ def simulate_trade_forward(
     setup: dict,
     max_risk: float = 10.0,
     slippage_pct: float = 0.0,
+    atr14: pd.Series | None = None,
 ) -> SimResult | None:
     """Simulate one trade forward using real subsequent bars."""
     if not setup.get("is_valid_setup"):
@@ -208,7 +239,12 @@ def simulate_trade_forward(
             extreme = min(extreme, close) if bearish else max(extreme, close)
 
         if scale_1_done or hit_t1:
-            atr = float(calculate_atr(df.iloc[: bar_idx + 1], 14).iloc[-1])
+            # calculate_atr is causal, so a precomputed full-series ATR read at
+            # bar_idx equals recomputing on the prefix — same value, far cheaper.
+            if atr14 is not None:
+                atr = float(atr14.iloc[bar_idx])
+            else:
+                atr = float(calculate_atr(df.iloc[: bar_idx + 1], 14).iloc[-1])
             if bearish:
                 extreme = min(extreme, close)
                 trailing_stop = min(trailing_stop, extreme + atr * 2.0)
@@ -273,10 +309,11 @@ def _process_ticker(args: tuple) -> tuple[str, list[dict], int]:
     else:
         setups = raw_setups
 
+    atr14 = calculate_atr(df, 14)
     results = []
     for idx, setup in setups:
         for slip in slippage_levels:
-            sim = simulate_trade_forward(df, idx, setup, slippage_pct=slip)
+            sim = simulate_trade_forward(df, idx, setup, slippage_pct=slip, atr14=atr14)
             if sim:
                 sim.ticker = ticker
                 results.append(sim.to_dict())
@@ -440,10 +477,11 @@ def run_training(
             if profile.max_setups_per_ticker
             else raw
         )
+        atr14 = calculate_atr(df, 14)
         results = []
         for idx, setup in setups:
             for slip in slippage_levels:
-                sim = simulate_trade_forward(df, idx, setup, slippage_pct=slip)
+                sim = simulate_trade_forward(df, idx, setup, slippage_pct=slip, atr14=atr14)
                 if sim:
                     sim.ticker = ticker
                     results.append(sim.to_dict())

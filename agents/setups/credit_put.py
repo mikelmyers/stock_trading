@@ -13,7 +13,10 @@ def analyze_credit_put(df: pd.DataFrame) -> dict:
 
     df = df.copy()
     df["SMA_50"] = df["Close"].rolling(50).mean()
-    df["SMA_200"] = df["Close"].rolling(200).mean()
+    # Backtests pre-attach a full-history SMA_200 (causal, exact at each bar);
+    # live scans pass a raw window, so compute it on the fly.
+    if "SMA_200" not in df.columns:
+        df["SMA_200"] = df["Close"].rolling(200).mean()
 
     close = df["Close"].iloc[-1]
     sma50 = df["SMA_50"].iloc[-1]

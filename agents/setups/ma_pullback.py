@@ -10,7 +10,10 @@ def analyze_ma_pullback(df: pd.DataFrame) -> dict:
         return _empty()
 
     df = df.copy()
-    df["EMA_21"] = df["Close"].ewm(span=21, adjust=False).mean()
+    # Backtests pre-attach a full-history EMA_21 (causal, exact at each bar);
+    # live scans pass a raw window, so compute it on the fly.
+    if "EMA_21" not in df.columns:
+        df["EMA_21"] = df["Close"].ewm(span=21, adjust=False).mean()
     df["SMA_50"] = df["Close"].rolling(50).mean()
 
     close = df["Close"].iloc[-1]
