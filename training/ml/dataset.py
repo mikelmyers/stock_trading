@@ -95,6 +95,65 @@ def build_dataset(
     return frame
 
 
+def build_from_checkpoints(
+    out: str | Path | None = None,
+    slippage_label: float = 0.0,
+) -> pd.DataFrame:
+    """Fast path: reuse the per-ticker sim checkpoints (labels already computed)
+    and just attach the feature vector at each setup's bar.
+
+    Avoids re-running the expensive ``find_historical_setups`` walk. Keeps one row
+    per setup by filtering to a single slippage level (default 0.0).
+    """
+    from training.resumable_train import _load_ckpt
+
+    history = download_history(load_training_universe())
+    items = list(history.items())
+    print(f"Joining checkpoints + features for {len(items)} tickers "
+          f"(slippage={slippage_label})...")
+
+    all_rows: list[dict] = []
+    t0 = time.time()
+    for i, (ticker, df) in enumerate(items, 1):
+        ckpt = _load_ckpt(ticker)
+        if not ckpt:
+            continue
+        feats = compute_feature_frame(df)
+        pos_by_date = {str(d.date()): p for p, d in enumerate(df.index)}
+        for r in ckpt:
+            if r.get("slippage_pct", 0.0) != slippage_label:
+                continue
+            pos = pos_by_date.get(r.get("entry_date"))
+            if pos is None:
+                continue
+            row = feats.iloc[pos].to_dict()
+            row.update({
+                "ticker": ticker,
+                "date": r["entry_date"],
+                "setup_type": r["setup_type"],
+                "setup_score": r["setup_score"],
+                "y_win": int(r["won"]),
+                "y_r": r["pnl_r"],
+                "exit_reason": r["exit_reason"],
+                "days_held": r["days_held"],
+            })
+            all_rows.append(row)
+        if i % 50 == 0 or i == len(items):
+            print(f"  [{i}/{len(items)}] {len(all_rows):,} rows "
+                  f"({time.time() - t0:.0f}s)")
+
+    frame = pd.DataFrame(all_rows, columns=FEATURE_COLUMNS + META_COLUMNS)
+    frame = frame.sort_values("date").reset_index(drop=True)
+    out_path = Path(out) if out else OUT_DIR / "dataset.parquet"
+    _save(frame, out_path)
+    print(f"\nSaved {len(frame):,} rows x {frame.shape[1]} cols -> {out_path}")
+    if len(frame):
+        print(f"  Base win rate: {frame['y_win'].mean():.1%}  "
+              f"|  mean R: {frame['y_r'].mean():.3f}")
+        print(f"  Setup mix: {frame['setup_type'].value_counts().to_dict()}")
+    return frame
+
+
 def _save(frame: pd.DataFrame, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -110,8 +169,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--limit", type=int, default=None, help="Use only first N tickers")
     p.add_argument("--slippage", type=float, default=0.0, help="Slippage %% for labels")
     p.add_argument("--out", default=None, help="Output path (.parquet)")
+    p.add_argument("--from-checkpoints", action="store_true",
+                   help="Reuse training/cache/sims_full checkpoints (fast, no re-walk)")
     args = p.parse_args(argv)
-    build_dataset(limit=args.limit, slippage=args.slippage, out=args.out)
+    if args.from_checkpoints:
+        build_from_checkpoints(out=args.out, slippage_label=args.slippage)
+    else:
+        build_dataset(limit=args.limit, slippage=args.slippage, out=args.out)
     return 0
 
 
