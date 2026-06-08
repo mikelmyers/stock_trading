@@ -41,3 +41,28 @@ The one un-played card: select the realized book by the **ML model's P(win)**
 instead of the hand score (true meta-labeling). Given the model's tiny AUC edge
 it is unlikely to flip a −0.024R book positive, but it's the last free test
 before concluding this signal family is a dead end on large-cap equities.
+
+## UPDATE — meta-labeling + selectivity changes the verdict
+
+Ran the meta-labeling test (`training/ml/metalabel_test.py`, OOS purged
+walk-forward). The model sorts realized outcomes **monotonically** out-of-sample
+(decile 1 = −0.064R / 43% win → decile 10 = +0.057R / 57% win), and its biggest
+skill is filtering out the junk bottom decile. Selecting the realized book by
+model P(win) flips it from −0.024R to **+0.025R** (+0.010R after cost).
+
+Being **selective** (manual trader's regime — take only top-conviction signals)
+is the real win:
+
+| Only trade if P(win) ≥ | trades/yr | mean R | net cost | −0.03 surv | −0.06 surv |
+|---|--:|--:|--:|--:|--:|
+| top 10% | 139 | +0.063 | +0.048 | +0.033 | +0.003 |
+| top 5%  | 123 | +0.056 | +0.041 | +0.026 | −0.004 |
+| top 1%  | 72  | +0.057 | +0.042 | +0.027 | −0.003 |
+
+**New verdict:** the raw strategy is a losing book, but **model-filtering +
+selectivity produces a positive, out-of-sample, cost-inclusive edge (~+0.048R on
+~139 trades/yr) that survives a mild survivorship haircut and is breakeven at the
+harsh one.** This is "good enough to take seriously" — modest (~5–7%/yr at safe
+sizing) but real-looking. The deciding uncertainty is now squarely the true
+survivorship haircut (Rung 2). Caveat: several selection schemes were tried, so a
+true forward/holdout test is needed before trusting it with size.
