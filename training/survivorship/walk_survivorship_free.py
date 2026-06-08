@@ -49,7 +49,8 @@ def _in_shard(ticker: str, shard: int, num_shards: int) -> bool:
     return h % num_shards == shard
 
 
-def run(workers: int = 4, shard: int = 0, num_shards: int = 1) -> None:
+def run(workers: int = 4, shard: int = 0, num_shards: int = 1,
+        limit: int | None = None) -> None:
     print("=" * 64)
     print("  SURVIVORSHIP-FREE CHECKPOINT WALK (slippage=[0.0], walk_step=1)")
     print("=" * 64)
@@ -62,6 +63,10 @@ def run(workers: int = 4, shard: int = 0, num_shards: int = 1) -> None:
         history = {t: df for t, df in history.items()
                    if _in_shard(t, shard, num_shards)}
         print(f"  Shard {shard}/{num_shards}: {len(history)} tickers in this slice.")
+
+    if limit is not None:
+        history = dict(list(history.items())[:limit])
+        print(f"  --limit {limit}: capped to {len(history)} tickers (smoke test).")
 
     _walk_with_checkpoints(history, PROFILE, workers, PROFILE.chunk_size)
 
@@ -80,12 +85,14 @@ def main(argv: list[str] | None = None) -> int:
                         "Run k=0..N-1 in separate containers to parallelize the "
                         "universe; each writes a disjoint set of per-ticker "
                         "checkpoints that merge cleanly via git.")
+    p.add_argument("--limit", type=int, default=None,
+                   help="Cap to the first N tickers of this shard (smoke test).")
     args = p.parse_args(argv)
     shard_str, _, num_str = args.shard.partition("/")
     shard, num_shards = int(shard_str), int(num_str or "1")
     if not (0 <= shard < num_shards):
         p.error(f"--shard k/N requires 0 <= k < N (got {args.shard})")
-    run(workers=args.workers, shard=shard, num_shards=num_shards)
+    run(workers=args.workers, shard=shard, num_shards=num_shards, limit=args.limit)
     return 0
 
 
