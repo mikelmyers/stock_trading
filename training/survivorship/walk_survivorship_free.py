@@ -31,11 +31,7 @@ from training.universe import load_training_universe
 
 PROFILE = TrainingProfile(
     name="surv_free",
-    # walk_step=2: setups are heavily autocorrelated bar-to-bar (a pattern valid
-    # at bar i is usually still valid at i+1), so scanning every other bar roughly
-    # halves compute while leaving ~900k setups — far more than the meta-labeling
-    # model + holdout need. The sampling change is noted in the writeup.
-    walk_step=2,
+    walk_step=1,
     max_setups_per_ticker=None,
     early_stop_real_setups=None,
     chunk_size=CHECKPOINT_CHUNK_SIZE,
