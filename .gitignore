@@ -11,3 +11,5 @@ Thumbs.db
 # ML artifacts (regenerate locally; can be large)
 training/ml/datasets/
 training/ml/models/
+# Resumable run per-ticker checkpoints
+training/cache/sims_full/
