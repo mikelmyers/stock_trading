@@ -1,98 +1,124 @@
 {
-  "min_setup_score": 50,
-  "min_composite_score": 50,
+  "min_setup_score": 80,
+  "min_composite_score": 65,
   "volume_multiplier": 1.5,
   "compression_ratio": 0.85,
   "min_ceiling_touches": 2,
   "min_probability_confidence": "LOW",
-  "expectancy_threshold": 0.104,
-  "trained_on_simulations": 2000,
-  "trained_win_rate": 50.0,
-  "trained_expectancy": 0.003,
+  "expectancy_threshold": 0.071,
+  "trained_on_simulations": 4510627,
+  "trained_win_rate": 51.8,
+  "trained_expectancy": 0.06,
   "enabled_setups": [
     "breakout",
+    "bull_flag",
     "credit_put",
     "double_bottom",
     "gap_fill",
     "ma_pullback",
+    "mean_reversion",
     "rsi_divergence",
     "vwap_reclaim"
   ],
   "setup_performance": {
     "bear_breakdown": {
-      "real_count": 90,
-      "count": 381,
-      "win_rate": 29.7,
-      "expectancy": -0.39,
+      "real_count": 191028,
+      "count": 191028,
+      "win_rate": 35.7,
+      "expectancy": -0.192,
       "enabled": false
     },
     "breakout": {
-      "real_count": 5,
-      "count": 23,
-      "win_rate": 60.9,
-      "expectancy": 0.255,
+      "real_count": 16672,
+      "count": 16672,
+      "win_rate": 44.5,
+      "expectancy": 0.098,
+      "enabled": true
+    },
+    "bull_flag": {
+      "real_count": 2664,
+      "count": 2664,
+      "win_rate": 48.4,
+      "expectancy": 0.068,
       "enabled": true
     },
     "credit_put": {
-      "real_count": 99,
-      "count": 449,
-      "win_rate": 61.0,
-      "expectancy": 0.078,
+      "real_count": 3187412,
+      "count": 3187412,
+      "win_rate": 53.4,
+      "expectancy": 0.066,
       "enabled": true
     },
     "double_bottom": {
-      "real_count": 14,
-      "count": 58,
-      "win_rate": 55.2,
-      "expectancy": 0.073,
+      "real_count": 34892,
+      "count": 34892,
+      "win_rate": 52.3,
+      "expectancy": 0.077,
       "enabled": true
     },
     "gap_fill": {
-      "real_count": 29,
-      "count": 126,
-      "win_rate": 61.9,
-      "expectancy": 0.368,
+      "real_count": 31054,
+      "count": 31054,
+      "win_rate": 43.0,
+      "expectancy": 0.04,
       "enabled": true
     },
     "ma_pullback": {
-      "real_count": 97,
-      "count": 407,
-      "win_rate": 53.1,
-      "expectancy": 0.133,
+      "real_count": 691323,
+      "count": 691323,
+      "win_rate": 49.0,
+      "expectancy": 0.072,
       "enabled": true
     },
     "mean_reversion": {
-      "real_count": 19,
-      "count": 83,
-      "win_rate": 43.4,
-      "expectancy": -0.077,
-      "enabled": false
+      "real_count": 43372,
+      "count": 43372,
+      "win_rate": 49.7,
+      "expectancy": 0.098,
+      "enabled": true
     },
     "rsi_divergence": {
-      "real_count": 98,
-      "count": 426,
-      "win_rate": 49.1,
-      "expectancy": 0.007,
+      "real_count": 299737,
+      "count": 299737,
+      "win_rate": 52.9,
+      "expectancy": 0.116,
       "enabled": true
     },
     "vwap_reclaim": {
-      "real_count": 11,
-      "count": 47,
-      "win_rate": 57.4,
-      "expectancy": 0.25,
+      "real_count": 12473,
+      "count": 12473,
+      "win_rate": 49.5,
+      "expectancy": 0.102,
       "enabled": true
     }
   },
   "options_backtest": {
     "count": 200,
-    "win_rate": 42.5,
-    "avg_pnl": -25.32,
-    "avg_r": 0.544,
-    "summary": "Options spreads on 200 setups: 42% win, +0.54R avg"
+    "win_rate": 19.0,
+    "avg_pnl": -32.76,
+    "avg_r": 0.34,
+    "summary": "Options spreads on 200 setups: 19% win, +0.34R avg"
   },
-  "strong_tickers": [],
+  "strong_tickers": [
+    "APP",
+    "DELL",
+    "DHR",
+    "DIS",
+    "FAST",
+    "HPQ",
+    "JNJ",
+    "KO",
+    "KR",
+    "MNST",
+    "MO",
+    "MRNA",
+    "SNDK",
+    "WMT",
+    "WRB"
+  ],
   "score_expectancy_map": {
-    "100": -0.024,
-    "80": 0.117
+    "100": 0.057,
+    "70": 0.067,
+    "80": 0.099
   }
 }
