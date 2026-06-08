@@ -7,3 +7,7 @@ venv/
 *.egg-info/
 .DS_Store
 Thumbs.db
+
+# ML artifacts (regenerate locally; can be large)
+training/ml/datasets/
+training/ml/models/
