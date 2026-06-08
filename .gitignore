@@ -13,3 +13,6 @@ training/ml/datasets/
 training/ml/models/
 # Resumable run per-ticker checkpoints
 training/cache/sims_full/
+
+# Extracted EODHD files (restore via: python scripts/setup_data.py)
+data/eodhd/

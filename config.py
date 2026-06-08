@@ -3,6 +3,7 @@
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
+DATA_DIR = BASE_DIR / "data"
 
 MAX_RISK_PER_TRADE = 10.0
 MAX_HOLDING_DAYS = 14
