@@ -81,11 +81,19 @@ jobs:
       - name: Extract EODHD archive
         run: |
           cd data
+          # unzip exits 1 on the "backslashes as path separators" warning even
+          # though extraction (with auto-converted separators) succeeds; bash -e
+          # would abort on that, so tolerate rc<=1 and fail only on real errors.
+          set +e
           unzip -q -o eodhd.zip -d _x
+          rc=$?
+          set -e
+          if [ "$rc" -gt 1 ]; then echo "unzip failed (rc=$rc)"; exit "$rc"; fi
           mkdir -p eodhd
           mv _x/Stocks eodhd/Stocks
           mv _x/ETFs eodhd/ETFs
           rmdir _x
+          echo "Extracted: $(ls eodhd/Stocks | wc -l) stocks, $(ls eodhd/ETFs | wc -l) ETFs"
       - name: Ingest delisted names
         run: python -m training.survivorship.ingest_delisted
       - name: Warm history bundle
