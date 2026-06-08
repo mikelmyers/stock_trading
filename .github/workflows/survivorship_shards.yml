@@ -7,21 +7,30 @@ name: Survivorship-free walk (sharded)
 # collect job stitches every shard's checkpoints together, builds the ML
 # dataset, runs the survivorship-free holdout, and commits the verdict back.
 
+# Triggered by editing the workflow or .github/walk_config.env on this branch
+# (so the periodic sims_full/ checkpoint commits do NOT re-launch the matrix).
+# Params come from walk_config.env; workflow_dispatch inputs override them if the
+# workflow ever lands on the default branch.
 on:
+  push:
+    branches: ["claude/survivorship-free-validation-resume-os92w2"]
+    paths:
+      - ".github/workflows/survivorship_shards.yml"
+      - ".github/walk_config.env"
   workflow_dispatch:
     inputs:
       num_shards:
         description: "Number of parallel shards (runners)"
-        required: true
-        default: "6"
+        required: false
+        default: ""
       limit:
         description: "Cap tickers per shard (smoke test; blank = full run)"
         required: false
         default: ""
       do_collect:
         description: "Run the collect+commit job after the walk (true/false)"
-        required: true
-        default: "true"
+        required: false
+        default: ""
 
 concurrency:
   group: survivorship-shards
@@ -35,12 +44,25 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       shards: ${{ steps.gen.outputs.shards }}
+      num_shards: ${{ steps.gen.outputs.num_shards }}
+      limit: ${{ steps.gen.outputs.limit }}
+      do_collect: ${{ steps.gen.outputs.do_collect }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
       - id: gen
         run: |
-          shards=$(python3 -c "import json; print(json.dumps(list(range(int('${{ inputs.num_shards }}')))))")
+          source .github/walk_config.env
+          NS="${{ inputs.num_shards }}"; [ -z "$NS" ] && NS="$NUM_SHARDS"
+          LM="${{ inputs.limit }}"; [ -z "$LM" ] && LM="$LIMIT"
+          DC="${{ inputs.do_collect }}"; [ -z "$DC" ] && DC="$DO_COLLECT"
+          shards=$(python3 -c "import json; print(json.dumps(list(range(int('$NS')))))")
           echo "shards=$shards" >> "$GITHUB_OUTPUT"
-          echo "Shards: $shards"
+          echo "num_shards=$NS" >> "$GITHUB_OUTPUT"
+          echo "limit=$LM" >> "$GITHUB_OUTPUT"
+          echo "do_collect=$DC" >> "$GITHUB_OUTPUT"
+          echo "Config -> shards=$shards limit='$LM' do_collect=$DC"
 
   prep:
     # Pulls the 255 MB EODHD LFS archive ONCE, ingests delisted names, and
@@ -103,13 +125,13 @@ jobs:
         with:
           name: price-cache
           path: training/cache
-      - name: Run shard ${{ matrix.shard }}/${{ inputs.num_shards }}
+      - name: Run shard ${{ matrix.shard }}/${{ needs.config.outputs.num_shards }}
         run: |
           EXTRA=""
-          if [ -n "${{ inputs.limit }}" ]; then EXTRA="--limit ${{ inputs.limit }}"; fi
+          if [ -n "${{ needs.config.outputs.limit }}" ]; then EXTRA="--limit ${{ needs.config.outputs.limit }}"; fi
           python -u -m training.survivorship.walk_survivorship_free \
             --workers "$(nproc)" \
-            --shard "${{ matrix.shard }}/${{ inputs.num_shards }}" \
+            --shard "${{ matrix.shard }}/${{ needs.config.outputs.num_shards }}" \
             $EXTRA
       - name: Upload shard checkpoints
         uses: actions/upload-artifact@v4
@@ -119,8 +141,8 @@ jobs:
           path: training/cache/sims_full/*.pkl
 
   collect:
-    needs: [walk]
-    if: ${{ inputs.do_collect == 'true' }}
+    needs: [config, walk]
+    if: ${{ needs.config.outputs.do_collect == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
