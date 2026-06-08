@@ -82,6 +82,41 @@ def main():
     print(f"    n={len(taken):,}  mean R {taken.mean():+.4f}  win {np.mean(taken>0)*100:.1f}%")
     print(f"    after -0.015 cost: {taken.mean()-0.015:+.4f} | after -0.06 surv: {taken.mean()-0.06:+.4f}")
 
+    # 3) SELECTIVE books: only enter when P(win) clears a high threshold.
+    #    Fits a manual trader taking few, high-conviction signals.
+    yrs = (oos["date"].max() - oos["date"].min()).days / 365.25
+    print("\n  SELECTIVE threshold books (only trade when P(win) >= cutoff):")
+    print(f"  {'cutoff':>10} | {'trades/yr':>9} | {'mean R':>8} | {'net -0.015':>10} | "
+          f"{'-0.03 surv':>10} | {'-0.06 surv':>10}")
+    print("  " + "-" * 70)
+    for q, lbl in [(0.90, "top 10%"), (0.95, "top 5%"), (0.99, "top 1%")]:
+        thr = oos["pwin"].quantile(q)
+        sub = oos[oos["pwin"] >= thr]
+        # capacity-limit the selective set
+        oh: list = []
+        tk = []
+        for day, grp in sub.groupby("date"):
+            while oh and oh[0][0] <= day:
+                heapq.heappop(oh)
+            tc = collections.Counter(t for _, t in oh)
+            for r in grp.sort_values("pwin", ascending=False).itertuples():
+                if len(oh) >= K:
+                    break
+                if tc[r.setup_type] >= PER:
+                    continue
+                heapq.heappush(oh, (r.close, r.setup_type))
+                tc[r.setup_type] += 1
+                tk.append(r.y_r)
+        tk = np.array(tk)
+        m = tk.mean()
+        print(f"  {lbl:>10} | {len(tk)/yrs:>9.0f} | {m:>+8.4f} | {m-0.015:>+10.4f} | "
+              f"{m-0.03:>+10.4f} | {m-0.06:>+10.4f}")
+
+    # Save OOS-scored trades for further iteration without retraining.
+    out = "training/ml/datasets/oos_scored.parquet"
+    oos[["date", "setup_type", "setup_score", "days_held", "y_r", "y_win", "pwin"]].to_parquet(out, index=False)
+    print(f"\n  Saved OOS-scored trades -> {out}")
+
     print("\n  VERDICT:", "model finds a positive tradeable subset"
           if taken.mean() - 0.015 > 0 else
           "even model-selected book is NEGATIVE -> signal family is a dead end here")
