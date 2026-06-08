@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 
 from training.backtester import TrainingProfile, CHECKPOINT_CHUNK_SIZE
 from training.history import download_history
@@ -39,7 +40,16 @@ PROFILE = TrainingProfile(
 )
 
 
-def run(workers: int = 4) -> None:
+def _in_shard(ticker: str, shard: int, num_shards: int) -> bool:
+    """Deterministic, stable assignment of a ticker to one of ``num_shards``
+    buckets via a content hash. Lets independent containers each take a
+    disjoint slice of the universe and merge their per-ticker checkpoint
+    pickles via git with no filename collisions."""
+    h = int(hashlib.sha256(ticker.encode()).hexdigest(), 16)
+    return h % num_shards == shard
+
+
+def run(workers: int = 4, shard: int = 0, num_shards: int = 1) -> None:
     print("=" * 64)
     print("  SURVIVORSHIP-FREE CHECKPOINT WALK (slippage=[0.0], walk_step=1)")
     print("=" * 64)
@@ -47,6 +57,11 @@ def run(workers: int = 4) -> None:
     print(f"Universe: {len(tickers)} tickers (incl. delisted ex-S&P names)")
     history = download_history(tickers)
     print(f"  Loaded {len(history)} tickers with usable price history.")
+
+    if num_shards > 1:
+        history = {t: df for t, df in history.items()
+                   if _in_shard(t, shard, num_shards)}
+        print(f"  Shard {shard}/{num_shards}: {len(history)} tickers in this slice.")
 
     _walk_with_checkpoints(history, PROFILE, workers, PROFILE.chunk_size)
 
@@ -60,8 +75,17 @@ def run(workers: int = 4) -> None:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Survivorship-free checkpoint walk")
     p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--shard", default="0/1",
+                   help="Process only this shard, formatted 'k/N' (0 <= k < N). "
+                        "Run k=0..N-1 in separate containers to parallelize the "
+                        "universe; each writes a disjoint set of per-ticker "
+                        "checkpoints that merge cleanly via git.")
     args = p.parse_args(argv)
-    run(workers=args.workers)
+    shard_str, _, num_str = args.shard.partition("/")
+    shard, num_shards = int(shard_str), int(num_str or "1")
+    if not (0 <= shard < num_shards):
+        p.error(f"--shard k/N requires 0 <= k < N (got {args.shard})")
+    run(workers=args.workers, shard=shard, num_shards=num_shards)
     return 0
 
 
