@@ -34,7 +34,7 @@ on:
 
 concurrency:
   group: survivorship-shards
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -134,14 +134,51 @@ jobs:
           name: price-cache
           path: training/cache
       - name: Run shard ${{ matrix.shard }}/${{ needs.config.outputs.num_shards }}
+        env:
+          SHARD: ${{ matrix.shard }}
+          NUM_SHARDS: ${{ needs.config.outputs.num_shards }}
+          LIMIT: ${{ needs.config.outputs.limit }}
+          BR: ${{ github.ref_name }}
         run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Push this shard's freshly-written per-ticker checkpoints to the branch.
+          # Filenames are disjoint across shards, so commits never conflict on
+          # content; only the ref update races, handled by pull --rebase + retry.
+          flush() {
+            git add training/cache/sims_full/*.pkl 2>/dev/null || true
+            git diff --cached --quiet && return 0
+            n=$(ls training/cache/sims_full/*.pkl 2>/dev/null | wc -l)
+            git commit -q -m "CI shard ${SHARD}: checkpoint progress (${n} pkl)" || return 0
+            for i in 1 2 3 4 5 6; do
+              if git pull --rebase -X ours origin "$BR" >/dev/null 2>&1 \
+                 && git push origin "HEAD:$BR" >/dev/null 2>&1; then
+                echo "  [shard ${SHARD}] pushed progress (${n} pkl)"; return 0
+              fi
+              sleep $(( (RANDOM % 8) + 3 ))
+            done
+            echo "  [shard ${SHARD}] push failed this cycle (will retry next flush)"
+          }
+
+          # Background committer: flush every few minutes, desynced per shard.
+          ( while sleep $(( 180 + SHARD * 12 )); do flush; done ) &
+          PUSHER=$!
+
           EXTRA=""
-          if [ -n "${{ needs.config.outputs.limit }}" ]; then EXTRA="--limit ${{ needs.config.outputs.limit }}"; fi
+          if [ -n "$LIMIT" ]; then EXTRA="--limit $LIMIT"; fi
+          set +e
           python -u -m training.survivorship.walk_survivorship_free \
-            --workers "$(nproc)" \
-            --shard "${{ matrix.shard }}/${{ needs.config.outputs.num_shards }}" \
-            $EXTRA
+            --workers "$(nproc)" --shard "${SHARD}/${NUM_SHARDS}" $EXTRA
+          rc=$?
+          set -e
+
+          kill "$PUSHER" 2>/dev/null || true
+          flush   # final flush of whatever finished after the last cycle
+          exit "$rc"
       - name: Upload shard checkpoints
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: sims-shard-${{ matrix.shard }}
