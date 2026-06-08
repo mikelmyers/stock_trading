@@ -12,7 +12,9 @@ Thumbs.db
 training/ml/datasets/
 training/ml/models/
 # Resumable run per-ticker checkpoints
-training/cache/sims_full/
+# NOTE: do NOT gitignore sims_full — removing it causes git clean to wipe
+# in-progress checkpoints on rebase/reset, losing hours of compute.
+# training/cache/sims_full/
 # Universe-keyed bundle/manifest caches (download_history rebuilds on demand)
 training/cache/bundle_*.pkl
 training/cache/manifests/
