@@ -140,8 +140,11 @@ def walk_forward_blind(seed: float, k: int, per_type: int, base_frac: float,
               f"|  {len(yr):,} signals passed")
 
     pool = pd.concat(parts).sort_values("date").reset_index(drop=True)
+    flat_book = None
     for label, regime in [("flat sizing", False), ("regime-scaled sizing", True)]:
         book = select_and_size(pool, k, per_type, -1.0, regime)  # floor already applied
+        if not regime:
+            flat_book = book
         m = equity_curve(book, seed, base_frac)
         peryr = book.assign(yr=book["date"].dt.year).groupby("yr")["R"].mean()
         print(f"\n  [{label}]  {len(book):,} trades ({m['trades_yr']:.0f}/yr), "
@@ -150,6 +153,52 @@ def walk_forward_blind(seed: float, k: int, per_type: int, base_frac: float,
               f"Sharpe {m['sharpe']:.2f}  | final ${m['final']:,.0f} on ${seed:,.0f}")
         print("    per-year mean R: " + "  ".join(
             f"{y}:{r:+.3f}" for y, r in peryr.items()))
+
+    # Persist the blind book (so sizing tweaks don't need a 12-min retrain) + study.
+    out = DATASET.parent / "blind_book.csv"
+    flat_book.to_csv(out, index=False)
+    sizing_study(flat_book, seed, k)
+
+
+def sizing_study(book: pd.DataFrame, seed: float, k: int):
+    """Given the realized (blind) trade R-series, find the growth-optimal bet
+    fraction (Kelly) and the realized CAGR / drawdown / risk-of-ruin at a range
+    of risk-per-trade levels. The MC ruin probabilities ignore concurrency
+    clustering, so real drawdowns can be a bit worse -- treat them as a floor."""
+    R = book["R"].to_numpy("float64")
+    yrs = (book["date"].max() - book["date"].min()).days / 365.25
+    tpy = len(R) / yrs
+
+    # Single-bet Kelly: maximize geometric growth E[log(1 + f R)].
+    fs = np.linspace(0.001, 0.25, 250)
+    growth = [np.mean(np.log(np.clip(1 + f * R, 1e-9, None))) for f in fs]
+    kelly = float(fs[int(np.argmax(growth))])
+
+    print("\n" + "=" * 70)
+    print("  POSITION-SIZING / RISK-OF-RUIN STUDY (on the blind realized book)")
+    print("=" * 70)
+    print(f"  {len(R)} trades, {tpy:.0f}/yr, mean R {R.mean():+.4f}, win {np.mean(R>0)*100:.0f}%")
+    print(f"  Single-bet Kelly fraction: {kelly*100:.1f}% of equity risked per trade.")
+    print(f"  But you hold up to K={k} at once -> full-Kelly total exposure would be "
+          f"~{kelly*k*100:.0f}%. Use a FRACTION of Kelly (¼-½) for survivable drawdowns.")
+    print(f"\n  {'risk/trade':>10} | {'CAGR':>7} | {'realDD':>7} | {'P(DD>30%)':>9} | {'P(DD>50%)':>9}")
+    print("  " + "-" * 56)
+    rng = np.random.default_rng(7)
+    horizon = int(tpy * 10)
+    for rf in [0.0025, 0.005, 0.0075, 0.01, 0.015, 0.02, 0.03, 0.05]:
+        m = equity_curve(book, seed, rf)
+        draws = rng.choice(R, size=(5000, horizon), replace=True)
+        eq = seed * np.cumprod(np.clip(1 + rf * draws, 1e-9, None), axis=1)
+        peak = np.maximum.accumulate(eq, axis=1)
+        dd = ((peak - eq) / peak).max(axis=1)
+        flag = "  <- " + ("KELLY-ish" if abs(rf - kelly) < 0.0026 else "")
+        print(f"  {rf*100:>9.2f}% | {m['cagr']*100:>6.1f}% | {m['max_dd']*100:>6.0f}% | "
+              f"{np.mean(dd>=0.30)*100:>8.0f}% | {np.mean(dd>=0.50)*100:>8.0f}%"
+              + (flag if abs(rf-kelly)<0.0026 else ""))
+    halfk = kelly / 2
+    print(f"\n  RECOMMENDATION: full Kelly ({kelly*100:.1f}%) maximizes growth but with "
+          f"brutal drawdowns.\n  Trade ~¼-½ Kelly ({kelly/4*100:.2f}-{halfk*100:.2f}% risk/trade) "
+          f"for near-optimal growth at\n  a fraction of the drawdown/ruin risk -- the survivable choice.")
 
 
 def run(clean_test: bool, seed: float, k: int, per_type: int, base_frac: float,
