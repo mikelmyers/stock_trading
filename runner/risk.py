@@ -46,6 +46,10 @@ class RiskConfig:
     max_leverage: float = 1.0            # notional <= equity x this (1.0 = cash, no margin)
     require_green_light: bool = True
     flat_by_close: bool = True
+    # classifier gate (active only once a model is trained; dormant otherwise)
+    use_classifier: bool = True
+    min_p_monster: float = 0.50
+    max_p_loss: float = 0.50
 
     def survival_cap(self) -> float:
         """Max risk fraction so survival_streak losses keep dd <= max_streak_dd."""
@@ -121,8 +125,18 @@ def _end_of_day(now) -> str:
 
 
 class RiskEngine:
-    def __init__(self, cfg: RiskConfig | None = None):
+    def __init__(self, cfg: RiskConfig | None = None, scorer=None):
         self.cfg = cfg or RiskConfig()
+        self._scorer = scorer            # injectable; defaults to classifier.score (lazy)
+
+    def _score(self, cv):
+        """Classifier P(monster)/P(loss), or None when no model is trained yet."""
+        if not self.cfg.use_classifier:
+            return None
+        if self._scorer is None:
+            from runner.classifier import score as _s
+            self._scorer = _s
+        return self._scorer(cv)
 
     def _stop(self, cv: ConditionVector) -> Optional[float]:
         """-1R stop: VWAP if it's below price, else a default %; clamped to [min,max]%."""
@@ -154,6 +168,9 @@ class RiskEngine:
             d.reason = f"not green-light ({cv.blowup_flags or 'watch'})"; return d
         if cv.blowup_flags:
             d.reason = f"blow-up flag veto [{cv.blowup_flags}]"; return d
+        sc = self._score(cv)                    # None until the classifier is trained
+        if sc is not None and (sc["p_monster"] < c.min_p_monster or sc["p_loss"] > c.max_p_loss):
+            d.reason = f"classifier veto (pm {sc['p_monster']:.2f} / pl {sc['p_loss']:.2f})"; return d
 
         stop = self._stop(cv)
         if not stop or stop >= cv.price:
