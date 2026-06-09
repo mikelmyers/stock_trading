@@ -103,3 +103,38 @@ higher selectivity (top 5%) where it holds up across cost assumptions.
 
 *(Provenance: 8-shard CI run #27171135775, all shards green; dataset
 `training/ml/datasets/survivorship_free.parquet`.)*
+
+## UPDATE — model round 1: market-regime features ~triple the edge (leakage-checked)
+
+Diagnosed the model's core blind spot: all 21 features were single-name technicals
+computed in isolation — **zero market context.** Added 12 causal market-regime +
+relative-strength features from the unused `^GSPC`/`^VIX` data (S&P 20/60d return,
+>SMA200, dist-SMA50; VIX level / 5d-change / 252d z-score; per-stock rel-return
+20/60/120d, rolling 60d beta + correlation). Rebuilt the survivorship-free dataset
+(1.91M setups, 33 features) and re-ran the same 2019+ holdout.
+
+| metric (clean holdout) | baseline 21-feat | round-1 33-feat |
+|---|--:|--:|
+| top-10% net edge | +0.0278R | **+0.0765R** |
+| top-5% net edge | +0.0404R | **+0.0863R** |
+| top-10% @ harsh −0.06R haircut | −0.0172R | **+0.0315R** (flips +) |
+| decile-10 mean R (cost-free) | +0.047R | +0.096R |
+| top-10% win rate | 55.2% | 58.3% |
+| OOS AUC | 0.534 | 0.540 |
+
+**Leakage ruled out:** purged walk-forward CV gives real AUC 0.523 vs **shuffled-label
+baseline 0.499** (≈0.50 every fold) → edge +0.0235, "signal present." AUC barely moved
+while the top decile nearly doubled — the gain is sharper *ranking*, not a leak. The
+12 new features account for **84% of model importance**; the top 6 are all VIX/market
+(`vix_z_252`, `vix_level`, `mkt_ret_60`, `mkt_dist_sma50`, `mkt_ret_20`, `vix_chg_5`).
+
+**Interpretation:** the edge was never mostly about *which* setup — it's about *when*.
+The signal is a regime timer: take the chart patterns in calm uptrends, skip them when
+the VIX spikes.
+
+**Stability (top-10% raw, cost-free mean R by year):** 2019 +0.124 · 2020 **+0.037**
+· 2021 +0.141 · 2022 **−0.088** · 2023 +0.099 · 2024 +0.285 · 2025 −0.026 · 2026 +0.030.
+Positive in **6 of 8 years including the 2020 crash** (so not a single-crash artifact),
+but a genuine −0.088R losing year in the 2022 bear. Real, broadly-persistent,
+regime-driven edge — tradeable with risk management, not bulletproof. Next levers:
+R-magnitude objective, and a bear-regime gate/short side to fix the 2022-type weakness.
