@@ -285,3 +285,30 @@ the correct expression of a timing edge, and means cross-sectional ranking would
 require an orthogonal CROSS-SECTIONAL alpha source -- fundamental/factor data
 (value, quality, earnings) we don't have. Breadth lever is gated on DATA, not
 modeling. Recommendation stands: ship the validated event-driven system.
+
+## UPDATE — real fundamentals (SEC-XBRL) cross-sectional: weak signal, concept confirmed
+
+Pulled free point-in-time fundamentals (SEC companyfacts XBRL via a public GCS
+bucket; 989k rows, 12.3k companies, monthly snapshots 2013+, ticker-keyed) and
+built classic value/quality/growth factors joined to our prices
+(`training/cross_sectional_fund.py`).
+
+| book | CAGR | Sharpe | maxDD |
+|---|--:|--:|--:|
+| long top-50 (fundamentals) | 24.8% | 0.98 | -43% |
+| + regime overlay | 17.9% | 0.92 | -42% |
+| equal-weight market | 16.5% | 0.91 | -27% |
+
+**IC flipped −0.004 (price-only, no skill) → +0.0093 (fundamentals)** — concept
+confirmed: fundamentals carry cross-sectional signal price-only data lacks, and the
+model leans on the right factors (sales/price, book/price, cash-flow/price,
+earnings/price, size, asset-growth). BUT the edge is **weak** (IC < 0.02 bar),
+standalone Sharpe ~1.0 barely beats market and is far below the event-driven 1.8,
+with a 43% drawdown. We're rediscovering the most crowded factors (value/size) with
+no neutralization; the stronger factors (estimate revisions, earnings surprise) need
+analyst data this set lacks.
+
+**Verdict:** not worth a standalone Model B. Higher-value use of the same data:
+fold these fundamental factors in as EXTRA FEATURES on the proven event-driven
+timing model (does "cheap + quality" sharpen the +0.077R "when" edge?) — reuses the
+validated framework, point-in-time join on ticker+date. That's the next cheap test.
