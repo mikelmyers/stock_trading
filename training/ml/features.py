@@ -16,8 +16,8 @@ import pandas as pd
 
 from agents.indicators import calculate_atr, calculate_rsi
 
-# Column order is stable so downstream models see consistent features.
-FEATURE_COLUMNS = [
+# Single-name technical features (causal, from the stock's own OHLCV).
+SELF_FEATURE_COLUMNS = [
     "ret_1d", "ret_5d", "ret_10d", "ret_20d", "ret_60d",
     "atr_pct", "atr_squeeze", "realized_vol_20",
     "rsi_14", "rsi_slope_3",
@@ -28,14 +28,64 @@ FEATURE_COLUMNS = [
     "up_days_10",
 ]
 
+# Market-regime + relative-strength features. These give the model the context
+# single-name technicals miss: what the broad tape (S&P 500) and the fear gauge
+# (VIX) are doing, and how the stock behaves *relative to* the market. All
+# causal (value at bar i uses only data through the bar-i close, same convention
+# as the self features). NaN when market data is unavailable (trees handle it).
+MARKET_FEATURE_COLUMNS = [
+    "mkt_ret_20", "mkt_ret_60", "mkt_above_sma200", "mkt_dist_sma50_pct",
+    "vix_level", "vix_chg_5", "vix_z_252",
+    "rel_ret_20", "rel_ret_60", "rel_ret_120",
+    "beta_60", "corr_60",
+]
 
-def compute_feature_frame(df: pd.DataFrame) -> pd.DataFrame:
+# Column order is stable so downstream models see consistent features.
+FEATURE_COLUMNS = SELF_FEATURE_COLUMNS + MARKET_FEATURE_COLUMNS
+
+
+def compute_market_frame(spy_df: pd.DataFrame, vix_df: pd.DataFrame) -> pd.DataFrame:
+    """Causal market-context frame indexed by date, computed once and reused for
+    every ticker. ``spy_df`` is a broad-market proxy (S&P 500 / SPY) and
+    ``vix_df`` the VIX, both with a DatetimeIndex and a ``Close`` column.
+
+    Returns the broadcast regime columns plus ``mkt_ret_1d`` (the market's daily
+    return), which ``compute_feature_frame`` needs to compute rolling beta/corr.
+    """
+    m = pd.DataFrame(index=spy_df.index)
+    c = spy_df["Close"]
+    m["mkt_ret_1d"] = c.pct_change()
+    m["mkt_ret_20"] = c.pct_change(20)
+    m["mkt_ret_60"] = c.pct_change(60)
+    m["mkt_ret_120"] = c.pct_change(120)
+    sma50 = c.rolling(50).mean()
+    sma200 = c.rolling(200).mean()
+    m["mkt_above_sma200"] = (c > sma200).astype("float64")
+    m["mkt_dist_sma50_pct"] = (c - sma50) / sma50
+
+    if vix_df is not None and len(vix_df):
+        v = vix_df["Close"].reindex(spy_df.index).ffill()
+        m["vix_level"] = v
+        m["vix_chg_5"] = v - v.shift(5)
+        vmean = v.rolling(252).mean()
+        vstd = v.rolling(252).std()
+        m["vix_z_252"] = (v - vmean) / vstd
+    else:
+        m["vix_level"] = np.nan
+        m["vix_chg_5"] = np.nan
+        m["vix_z_252"] = np.nan
+    return m
+
+
+def compute_feature_frame(df: pd.DataFrame,
+                          market: pd.DataFrame | None = None) -> pd.DataFrame:
     """Return a causal feature DataFrame aligned to ``df.index``.
 
-    NaNs appear in the warm-up region (e.g. before 200 bars exist for SMA_200).
-    Gradient-boosted trees handle NaN natively, so we leave them in rather than
-    forward-filling (which could leak) or dropping (which the caller may prefer
-    to do explicitly).
+    If ``market`` (output of :func:`compute_market_frame`) is supplied, the
+    market-regime and relative-strength columns are populated; otherwise they
+    are left NaN. NaNs also appear in the warm-up region (e.g. before 200 bars
+    exist for SMA_200). Gradient-boosted trees handle NaN natively, so we leave
+    them in rather than forward-filling (which could leak) or dropping.
     """
     close = df["Close"]
     high = df["High"]
@@ -84,5 +134,25 @@ def compute_feature_frame(df: pd.DataFrame) -> pd.DataFrame:
     out["dist_high_252_pct"] = (close - high252) / high252
     out["dist_low_20_pct"] = (close - low20) / low20
     out["up_days_10"] = (daily_ret > 0).rolling(10).sum()
+
+    # --- Market regime + relative strength (only if market context supplied) ---
+    if market is not None:
+        mk = market.reindex(df.index)  # align market by date to this ticker
+        for col in ("mkt_ret_20", "mkt_ret_60", "mkt_above_sma200",
+                    "mkt_dist_sma50_pct", "vix_level", "vix_chg_5", "vix_z_252"):
+            out[col] = mk[col].to_numpy()
+        # Relative strength: stock return minus market return over each horizon.
+        out["rel_ret_20"] = out["ret_20d"] - mk["mkt_ret_20"].to_numpy()
+        out["rel_ret_60"] = out["ret_60d"] - mk["mkt_ret_60"].to_numpy()
+        out["rel_ret_120"] = close.pct_change(120) - mk["mkt_ret_120"].to_numpy()
+        # Rolling 60d beta / correlation of daily returns vs the market.
+        mret = mk["mkt_ret_1d"]
+        cov = daily_ret.rolling(60).cov(mret)
+        var = mret.rolling(60).var()
+        out["beta_60"] = cov / var
+        out["corr_60"] = daily_ret.rolling(60).corr(mret)
+    else:
+        for col in MARKET_FEATURE_COLUMNS:
+            out[col] = np.nan
 
     return out[FEATURE_COLUMNS]

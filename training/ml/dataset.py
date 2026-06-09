@@ -26,7 +26,11 @@ import pandas as pd
 from agents.indicators import calculate_atr
 from training.backtester import find_historical_setups, simulate_trade_forward
 from training.history import download_history
-from training.ml.features import FEATURE_COLUMNS, compute_feature_frame
+from training.ml.features import (
+    FEATURE_COLUMNS,
+    compute_feature_frame,
+    compute_market_frame,
+)
 from training.universe import load_training_universe
 
 OUT_DIR = Path(__file__).resolve().parent / "datasets"
@@ -95,6 +99,25 @@ def build_dataset(
     return frame
 
 
+def _build_market_frame(history: dict):
+    """Locate the broad-market proxy (S&P 500) and VIX in the loaded history and
+    build the shared causal market-context frame. Returns None if no proxy is
+    available (market features then fall back to NaN)."""
+    def _find(*names):
+        for n in names:
+            if n in history and len(history[n]):
+                return history[n]
+        return None
+
+    spy = _find("^GSPC", "GSPC", "SPY", "^SPX")
+    vix = _find("^VIX", "VIX")
+    if spy is None:
+        print("  [market] no S&P proxy in history — market features left NaN")
+        return None
+    print(f"  [market] proxy ok (rows={len(spy)}), vix={'ok' if vix is not None else 'missing'}")
+    return compute_market_frame(spy, vix)
+
+
 def build_from_checkpoints(
     out: str | Path | None = None,
     slippage_label: float = 0.0,
@@ -109,8 +132,9 @@ def build_from_checkpoints(
 
     history = download_history(load_training_universe())
     items = list(history.items())
+    market = _build_market_frame(history)
     print(f"Joining checkpoints + features for {len(items)} tickers "
-          f"(slippage={slippage_label})...")
+          f"(slippage={slippage_label}, market_ctx={'yes' if market is not None else 'no'})...")
 
     all_rows: list[dict] = []
     t0 = time.time()
@@ -118,7 +142,7 @@ def build_from_checkpoints(
         ckpt = _load_ckpt(ticker)
         if not ckpt:
             continue
-        feats = compute_feature_frame(df)
+        feats = compute_feature_frame(df, market=market)
         pos_by_date = {str(d.date()): p for p, d in enumerate(df.index)}
         for r in ckpt:
             if r.get("slippage_pct", 0.0) != slippage_label:
