@@ -245,14 +245,21 @@ def simulate_trade_forward(
                 atr = float(atr14.iloc[bar_idx])
             else:
                 atr = float(calculate_atr(df.iloc[: bar_idx + 1], 14).iloc[-1])
+            # The level a live stop order rests at TODAY was set from data
+            # through yesterday's close — test the bar against the prior level
+            # first, then ratchet with today's close/ATR for tomorrow.
+            # (Raising the trail with today's close and triggering it on the
+            # same bar's low was intrabar lookahead.)
             if bearish:
-                extreme = min(extreme, close)
-                trailing_stop = min(trailing_stop, extreme + atr * 2.0)
                 trail_hit = high >= trailing_stop and trailing_stop < stop
+                if not trail_hit:
+                    extreme = min(extreme, close)
+                    trailing_stop = min(trailing_stop, extreme + atr * 2.0)
             else:
-                extreme = max(extreme, close)
-                trailing_stop = max(trailing_stop, extreme - atr * 2.0)
                 trail_hit = low <= trailing_stop and trailing_stop > stop
+                if not trail_hit:
+                    extreme = max(extreme, close)
+                    trailing_stop = max(trailing_stop, extreme - atr * 2.0)
             if trail_hit:
                 pnl = _pnl(trailing_stop, shares_remaining)
                 return SimResult(
