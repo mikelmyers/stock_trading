@@ -258,3 +258,30 @@ index-ETF credit_put (concentrated single bet + the weakest-modeled instrument).
 **Bottom line:** a real, modest, honestly-sized, forward-testable long/risk-on
 strategy — Sharpe ~1.8 through-cycle, ~5% CAGR at 1%/trade — with the tooling to
 keep it honest. Not a money-printer; a survivable edge that won't blow up.
+
+## UPDATE — cross-sectional ranking (breadth thesis): FAILS, and tells us why
+
+Tested the highest-leverage "make it bigger" idea (`training/cross_sectional.py`):
+rank the whole universe monthly, hold top-N, instead of waiting for ~9 discrete
+setups. Grinold's law (IR ~= skill x sqrt(breadth)) says breadth is the lever.
+
+| book | CAGR | Sharpe | maxDD |
+|---|--:|--:|--:|
+| long top-50 | 35.7% | 1.04 | -45% |
+| long top-50 + regime | 27.3% | 1.03 | -37% |
+| equal-weight market | 19.2% | 0.98 | -27% |
+
+**Information Coefficient = -0.0043 (≈ zero) → NO cross-sectional ranking skill.**
+The flashy 35% CAGR is a mirage: (1) both top-50 AND bottom-50 beat the market →
+the model just tilts to high-volatility names, not a directional rank; (2) the
+"market" benchmark itself shows 19% CAGR (survivorship + equal-weight premium of
+this universe); (3) Sharpe 1.04 is BELOW the event-driven 1.8 with 3x the drawdown.
+
+**Why it fails (the valuable insight):** the model is 84% market-regime/VIX
+features, which are IDENTICAL across all stocks on a given day → cross-sectionally
+flat → zero ranking power. **Our edge is market TIMING ("when"), not stock
+SELECTION ("which").** This validates the event-driven + regime-timing design as
+the correct expression of a timing edge, and means cross-sectional ranking would
+require an orthogonal CROSS-SECTIONAL alpha source -- fundamental/factor data
+(value, quality, earnings) we don't have. Breadth lever is gated on DATA, not
+modeling. Recommendation stands: ship the validated event-driven system.
