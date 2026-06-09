@@ -47,7 +47,9 @@ class RiskConfig:
     max_leverage: float = 1.0            # notional <= equity x this (1.0 = cash, no margin)
     require_green_light: bool = True
     flat_by_close: bool = True
-    # classifier gate (active only once a model is trained; dormant otherwise)
+    # classifier gate (active only once a model is trained; dormant otherwise).
+    # These are FALLBACK thresholds — the trained bundle carries calibrated,
+    # base-rate-aware thresholds from its holdout, which take precedence.
     use_classifier: bool = True
     min_p_monster: float = 0.50
     max_p_loss: float = 0.50
@@ -190,8 +192,12 @@ class RiskEngine:
         if cv.blowup_flags:
             d.reason = f"blow-up flag veto [{cv.blowup_flags}]"; return d
         sc = self._score(cv)                    # None until the classifier is trained
-        if sc is not None and (sc["p_monster"] < c.min_p_monster or sc["p_loss"] > c.max_p_loss):
-            d.reason = f"classifier veto (pm {sc['p_monster']:.2f} / pl {sc['p_loss']:.2f})"; return d
+        if sc is not None:
+            thr_m = sc.get("thr_monster") or c.min_p_monster
+            thr_l = sc.get("thr_loss") or c.max_p_loss
+            if sc["p_monster"] < thr_m or sc["p_loss"] > thr_l:
+                d.reason = (f"classifier veto (pm {sc['p_monster']:.2f}<{thr_m:.2f} "
+                            f"/ pl {sc['p_loss']:.2f}>{thr_l:.2f})"); return d
 
         stop = self._stop(cv)
         if not stop or stop >= cv.price:

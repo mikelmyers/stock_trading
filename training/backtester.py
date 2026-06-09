@@ -178,7 +178,10 @@ def simulate_trade_forward(
         return None
 
     bearish = setup.get("bias") == "bearish"
-    entry = setup["current_price"] * (1 + slippage_pct / 100)
+    # adverse slippage: longs fill higher, shorts fill LOWER (the old +slip on
+    # shorts improved their entries)
+    slip = slippage_pct / 100
+    entry = setup["current_price"] * ((1 - slip) if bearish else (1 + slip))
     stop = round(setup.get("stop_loss") or setup["resistance_level"] * 0.98, 2)
     risk_per_share = (stop - entry) if bearish else (entry - stop)
     if risk_per_share <= 0:
