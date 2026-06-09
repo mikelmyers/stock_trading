@@ -46,8 +46,8 @@ def _deployment_model():
     return m, fc, floor
 
 
-def scan(top: int, risk_pct: float, lookback: int = 1):
-    hist = download_history(load_training_universe())
+def scan(top: int, risk_pct: float, lookback: int = 1, refresh: bool = False):
+    hist = download_history(load_training_universe(), refresh=refresh)
     market = compute_market_frame(hist.get("^GSPC"), hist.get("^VIX"))
     model, fc, floor = _deployment_model()
 
@@ -131,8 +131,10 @@ def main(argv=None):
     p.add_argument("--risk", type=float, default=0.5, help="suggested %% equity risk/trade")
     p.add_argument("--lookback", type=int, default=1,
                    help="scan the last N bars per name (1=today; >1 backfills recent signals)")
+    p.add_argument("--refresh", action="store_true",
+                   help="force a fresh yfinance pull (REQUIRED for live daily use; cache is stale)")
     a = p.parse_args(argv)
-    scan(a.top, a.risk, a.lookback)
+    scan(a.top, a.risk, a.lookback, a.refresh)
     return 0
 
 
