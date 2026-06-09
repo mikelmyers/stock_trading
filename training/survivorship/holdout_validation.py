@@ -36,6 +36,7 @@ import pandas as pd
 from training.backtester import MAX_HOLDING_DAYS
 from training.ml.features import FEATURE_COLUMNS
 from training.ml.model import _make_classifier
+from training.simutil import trading_close_dates, trading_to_calendar_days
 
 SURV_DIR = Path(__file__).resolve().parent
 MEMBERSHIP_CSV = SURV_DIR / "sp500_ticker_start_end.csv"
@@ -70,7 +71,7 @@ def _book(df: pd.DataFrame, score_col: str = "pwin") -> np.ndarray:
     """Capacity-limited book: at most K concurrent, max PER per setup type,
     greedily filled in score order each day."""
     df = df.copy()
-    df["close"] = pd.to_datetime(df["date"]) + pd.to_timedelta(df["days_held"], "D")
+    df["close"] = trading_close_dates(df["date"], df["days_held"])
     df["date"] = pd.to_datetime(df["date"])
     openh: list = []
     taken = []
@@ -105,7 +106,9 @@ def run(dataset_path: str | Path, members_only: bool = True) -> dict:
     y = df["y_win"].to_numpy("int64")
 
     # Purge: drop training rows whose forward window could overlap the holdout.
-    purge_cutoff = HOLDOUT_START - pd.Timedelta(days=MAX_HOLDING_DAYS + EMBARGO_DAYS)
+    # MAX_HOLDING_DAYS is TRADING days; the purge gap must cover it in calendar days.
+    purge_cutoff = HOLDOUT_START - pd.Timedelta(
+        days=trading_to_calendar_days(MAX_HOLDING_DAYS) + EMBARGO_DAYS)
     train_mask = (df["date"] < purge_cutoff).to_numpy()
     test_mask = (df["date"] >= HOLDOUT_START).to_numpy()
     print(f"\nTrain: {train_mask.sum():,} rows (< {purge_cutoff.date()}, "

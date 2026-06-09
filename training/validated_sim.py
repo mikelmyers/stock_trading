@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 from training.ml.features import FEATURE_COLUMNS
+from training.simutil import event_curve_sharpe, trading_close_dates
 
 DATASET = Path(__file__).resolve().parent / "ml" / "datasets" / "survivorship_free_v2.parquet"
 DEAD_SETUPS = {"bear_breakdown"}          # Layer-2 audit: -0.22R, no edge any regime
@@ -80,9 +81,9 @@ def equity_curve(book: pd.DataFrame, seed: float, base_frac: float):
     curve = [(book["date"].min(), seed)]
     for t in book.sort_values("date").itertuples():
         while openh and openh[0][0] <= t.date:
-            _, rd, r = heapq.heappop(openh)
+            d, rd, r = heapq.heappop(openh)
             equity += rd * r
-            curve.append((t.date, equity))
+            curve.append((d, equity))
         if equity <= 0:
             equity = 0.0
             break
@@ -98,9 +99,9 @@ def equity_curve(book: pd.DataFrame, seed: float, base_frac: float):
     max_dd = float(np.max((peak - eq) / peak)) if len(eq) else 0.0
     yrs = (book["date"].max() - book["date"].min()).days / 365.25
     cagr = (equity / seed) ** (1 / yrs) - 1 if equity > 0 and yrs > 0 else -1.0
-    # daily-ish Sharpe from the equity steps
-    rets = pd.Series(eq).pct_change().dropna()
-    sharpe = rets.mean() / rets.std() * np.sqrt(252) if rets.std() > 0 else 0.0
+    # Sharpe on the DAILY-resampled curve (sqrt(252) on per-trade events
+    # inflated the old headline numbers ~1.6-1.9x)
+    sharpe = event_curve_sharpe(cur)
     return {"final": equity, "cagr": cagr, "max_dd": max_dd, "sharpe": sharpe,
             "yrs": yrs, "trades_yr": len(book) / yrs}
 
@@ -115,7 +116,7 @@ def walk_forward_blind(seed: float, k: int, per_type: int, base_frac: float,
     df["date"] = pd.to_datetime(df["date"])
     df = df[~df["setup_type"].isin(DEAD_SETUPS)].copy()
     df["setup_code"] = df["setup_type"].astype("category").cat.codes
-    df["close"] = df["date"] + pd.to_timedelta(df["days_held"], "D")
+    df["close"] = trading_close_dates(df["date"], df["days_held"])
     last_year = df["date"].dt.year.max()
 
     parts = []
@@ -216,8 +217,11 @@ def run(clean_test: bool, seed: float, k: int, per_type: int, base_frac: float,
     eval_lo, eval_hi = ("2024-01-01", "2099-01-01") if clean_test else ("2019-01-01", "2024-01-01")
     ev = df[(df["date"] >= eval_lo) & (df["date"] < eval_hi)].copy()
     ev["p"] = model.predict_proba(ev[fc].to_numpy("float64"))[:, 1]
-    ev["close"] = ev["date"] + pd.to_timedelta(ev["days_held"], "D")
-    p_floor = ev["p"].quantile(p_floor_q)
+    ev["close"] = trading_close_dates(ev["date"], ev["days_held"])
+    # threshold from the TRAINING distribution -- the eval window's own quantile
+    # isn't knowable on day one of the window (matches walk_forward_blind)
+    p_tr = model.predict_proba(train[fc].to_numpy("float64"))[:, 1]
+    p_floor = float(np.quantile(p_tr, p_floor_q))
 
     tag = "CLEAN TEST (2024+, one-shot)" if clean_test else "DEV (2019-2023)"
     print("=" * 70)

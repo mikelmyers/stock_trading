@@ -22,6 +22,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from training.simutil import trading_close_dates
+
 BASE = Path(__file__).resolve().parent
 DATASET = BASE / "ml" / "datasets" / "full.parquet"
 LEARNED = BASE.parent / "learned_params.json"
@@ -36,7 +38,7 @@ def load_stream(cost_r: float) -> pd.DataFrame:
     df = df[(df["date"] >= START) & df["setup_type"].isin(enabled) & (df["setup_score"] >= min_score)]
     df = df.sort_values("date").reset_index(drop=True)
     df["R_cost"] = df["y_r"] - cost_r
-    df["close"] = df["date"] + pd.to_timedelta(df["days_held"], "D")
+    df["close"] = trading_close_dates(df["date"], df["days_held"])
     return df
 
 
