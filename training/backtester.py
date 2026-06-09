@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from agents.indicators import calculate_atr
+from agents.indicators import calculate_atr, calculate_rolling_vwap
 from agents.setups.registry import SETUP_REGISTRY
 from config import (
     BASE_DIR,
@@ -140,7 +140,7 @@ def _precompute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["EMA_21"] = out["Close"].ewm(span=21, adjust=False).mean()
     out["SMA_200"] = out["Close"].rolling(200).mean()
-    out["VWAP"] = (out["Close"] * out["Volume"]).cumsum() / out["Volume"].cumsum()
+    out["VWAP"] = calculate_rolling_vwap(out, 20)
     return out
 
 

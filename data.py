@@ -60,12 +60,14 @@ def fetch_multiple(
 
 
 def extract_ticker_df(data: pd.DataFrame, ticker: str, num_tickers: int) -> pd.DataFrame:
-    if num_tickers == 1:
-        df = data.dropna()
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.droplevel(1)
-        return df
-    return data[ticker].dropna()
+    # fetch_multiple uses group_by="ticker", so the symbol sits on column
+    # level 0 even when only one ticker was requested; selecting by symbol
+    # (rather than dropping a hardcoded level) handles both layouts.
+    if isinstance(data.columns, pd.MultiIndex):
+        if ticker in data.columns.get_level_values(0):
+            return data[ticker].dropna()
+        return data.droplevel(1, axis=1).dropna()
+    return data.dropna()
 
 
 def get_current_price(ticker: str) -> float:

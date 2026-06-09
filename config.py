@@ -37,7 +37,11 @@ SECTOR_ETFS = {
     "Basic Materials": "XLB",
 }
 
-DATA_PERIOD = "60d"
+# Live scan window. Must cover the deepest setup lookback (55 bars for
+# ma_pullback/credit_put, SMA_200 for trend filters) so the live scanner can
+# actually fire the setups training calibrated; at "60d" (~41 bars) the
+# setups that produced ~86% of training samples could never trigger live.
+DATA_PERIOD = "2y"
 DATA_INTERVAL = "1d"
 
 SCALE_OUT_LEVELS = [

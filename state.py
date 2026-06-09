@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +42,7 @@ class ActivePosition:
     composite_score: int = 0
     scale_outs_hit: list[str] = field(default_factory=list)
     status: str = "OPEN"
+    scaled_pnl: float = 0.0  # realized P&L already banked via scale-outs
 
     @property
     def risk_per_share(self) -> float:
@@ -119,8 +121,11 @@ class StateManager:
         return AgentState()
 
     def save(self) -> None:
-        with open(self.path, "w", encoding="utf-8") as f:
+        # Atomic write: a crash mid-dump must not corrupt live position state.
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.state.to_dict(), f, indent=2)
+        os.replace(tmp, self.path)
 
     def has_open_position(self, ticker: str) -> bool:
         return any(
@@ -146,12 +151,14 @@ class StateManager:
         ticker = ticker.upper()
         for i, pos in enumerate(self.state.active_positions):
             if pos.ticker == ticker and pos.status == "OPEN":
-                pnl = (exit_price - pos.entry_price) * pos.shares_remaining
-                r_mult = (
-                    (exit_price - pos.entry_price) / pos.risk_per_share
-                    if pos.risk_per_share > 0
-                    else 0.0
-                )
+                # Whole-trade P&L: the remainder closed here PLUS what was
+                # already banked by scale-outs. Without scaled_pnl, a trade
+                # that took 66% off at +1R/+2R and trailed out flat was
+                # recorded as a LOSS, corrupting win rate and trust score.
+                remainder_pnl = (exit_price - pos.entry_price) * pos.shares_remaining
+                pnl = remainder_pnl + pos.scaled_pnl
+                initial_risk = pos.risk_per_share * pos.shares
+                r_mult = pnl / initial_risk if initial_risk > 0 else 0.0
                 closed = ClosedTrade(
                     ticker=ticker,
                     entry_price=pos.entry_price,
@@ -170,7 +177,8 @@ class StateManager:
                 self.state.active_positions.pop(i)
                 self.state.trade_history.append(closed)
                 self.state.total_trades += 1
-                self.state.total_pnl = round(self.state.total_pnl + closed.pnl, 2)
+                # scale-out P&L was already added to total_pnl at scale time
+                self.state.total_pnl = round(self.state.total_pnl + remainder_pnl, 2)
                 if closed.pnl > 0:
                     self.state.wins += 1
                 self._update_trust_score()
@@ -195,6 +203,7 @@ class StateManager:
                 )
                 self.state.scale_out_log.append(event)
                 self.state.total_pnl = round(self.state.total_pnl + event.pnl, 2)
+                pos.scaled_pnl = round(pos.scaled_pnl + event.pnl, 2)
                 pos.shares_remaining = round(pos.shares_remaining - shares_sold, 4)
                 pos.scale_outs_hit.append(level_label)
                 if pos.shares_remaining <= 0:

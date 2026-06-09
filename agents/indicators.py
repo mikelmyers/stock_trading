@@ -28,3 +28,16 @@ def calculate_atr(df: pd.DataFrame, window: int = 14) -> pd.Series:
         axis=0,
     )
     return pd.Series(true_range, index=df.index).rolling(window=window).mean()
+
+
+def calculate_rolling_vwap(df: pd.DataFrame, window: int = 20) -> pd.Series:
+    """Volume-weighted average of typical price over the trailing ``window`` bars.
+
+    A daily-bar "VWAP" anchored at the start of whatever frame you happen to
+    hold (the old cumsum version) means a decades-old average in training and a
+    60-day average live — two unrelated numbers. A fixed trailing window is the
+    same quantity everywhere and is causal at every bar.
+    """
+    typical = (df["High"] + df["Low"] + df["Close"]) / 3
+    pv = (typical * df["Volume"]).rolling(window).sum()
+    return pv / df["Volume"].rolling(window).sum()
