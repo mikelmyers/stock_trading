@@ -46,7 +46,7 @@ def _deployment_model():
     return m, fc, floor
 
 
-def scan(top: int, risk_pct: float):
+def scan(top: int, risk_pct: float, lookback: int = 1):
     hist = download_history(load_training_universe())
     market = compute_market_frame(hist.get("^GSPC"), hist.get("^VIX"))
     model, fc, floor = _deployment_model()
@@ -68,33 +68,38 @@ def scan(top: int, risk_pct: float):
             stale += 1
             continue
         feats = compute_feature_frame(df, market=market)
-        frow = feats.iloc[-1]
-        if frow[FEATURE_COLUMNS].isna().all():
-            continue
-        for stype, analyzer in SETUP_REGISTRY.items():
-            if stype in DEAD:
+        for back in range(lookback):                 # scan last `lookback` bars
+            i = len(df) - 1 - back
+            if i < 260:
+                break
+            frow = feats.iloc[i]
+            if frow[FEATURE_COLUMNS].isna().all():
                 continue
-            try:
-                s = analyzer(df)
-            except Exception:
-                continue
-            if not s.get("is_valid_setup"):
-                continue
-            x = np.array([[*(frow[c] for c in FEATURE_COLUMNS),
-                           s.get("confidence_score", 0), SETUP_CODE[stype]]], dtype="float64")
-            p = float(model.predict_proba(x)[:, 1][0])
-            if p < floor:
-                continue
-            entry = s["current_price"]; stop = s["stop_loss"]
-            cands.append({
-                "asof": str(asof.date()), "ticker": tk, "setup": stype,
-                "bias": s.get("bias", "bullish"), "entry": round(entry, 2),
-                "stop": round(stop, 2), "atr14": s.get("atr_14", 0),
-                "risk_pct_of_price": round(abs(entry - stop) / entry * 100, 1) if entry else 0,
-                "model_p": round(p, 3), "suggested_risk_pct": risk_pct,
-            })
+            win = df.iloc[: i + 1]
+            for stype, analyzer in SETUP_REGISTRY.items():
+                if stype in DEAD:
+                    continue
+                try:
+                    s = analyzer(win)
+                except Exception:
+                    continue
+                if not s.get("is_valid_setup"):
+                    continue
+                x = np.array([[*(frow[c] for c in FEATURE_COLUMNS),
+                               s.get("confidence_score", 0), SETUP_CODE[stype]]], dtype="float64")
+                p = float(model.predict_proba(x)[:, 1][0])
+                if p < floor:
+                    continue
+                entry = s["current_price"]; stop = s["stop_loss"]
+                cands.append({
+                    "asof": str(df.index[i].date()), "ticker": tk, "setup": stype,
+                    "bias": s.get("bias", "bullish"), "entry": round(entry, 2),
+                    "stop": round(stop, 2), "atr14": s.get("atr_14", 0),
+                    "risk_pct_of_price": round(abs(entry - stop) / entry * 100, 1) if entry else 0,
+                    "model_p": round(p, 3), "suggested_risk_pct": risk_pct,
+                })
 
-    cands.sort(key=lambda r: r["model_p"], reverse=True)
+    cands.sort(key=lambda r: (r["asof"], r["model_p"]), reverse=True)
     book = cands[:top]
 
     print("=" * 74)
@@ -124,8 +129,10 @@ def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--top", type=int, default=10)
     p.add_argument("--risk", type=float, default=0.5, help="suggested %% equity risk/trade")
+    p.add_argument("--lookback", type=int, default=1,
+                   help="scan the last N bars per name (1=today; >1 backfills recent signals)")
     a = p.parse_args(argv)
-    scan(a.top, a.risk)
+    scan(a.top, a.risk, a.lookback)
     return 0
 
 
