@@ -359,3 +359,6 @@ training/cache/tickers/ZION_max.pkl
 
 # Extracted EODHD files (restore via: python scripts/setup_data.py)
 data/eodhd/
+
+# Runner system local logs (episode ledger, outcomes)
+runner/data/
