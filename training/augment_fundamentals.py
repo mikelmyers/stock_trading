@@ -95,8 +95,47 @@ def _auc(y, p):
     return (np.sum(np.where(y == 1, np.arange(1, len(y) + 1), 0)) - n1 * (n1 + 1) / 2) / (n0 * n1)
 
 
+def _net(m_feats, tr, te):
+    import lightgbm as lgb
+    m = lgb.LGBMClassifier(n_estimators=400, learning_rate=0.03, num_leaves=31,
+                           subsample=0.8, colsample_bytree=0.8, min_child_samples=200,
+                           n_jobs=-1, verbosity=-1)
+    m.fit(tr[m_feats].to_numpy("float64"), tr["y_win"].to_numpy("int64"))
+    p = m.predict_proba(te[m_feats].to_numpy("float64"))[:, 1]
+    book = te[p >= np.quantile(p, 0.90)]
+    return book["y_r"].mean() - 0.019
+
+
+def walk_forward(ev):
+    base = FEATURE_COLUMNS + ["setup_score", "setup_code"]
+    aug = base + FUND_FACTORS
+    ev = ev.copy(); ev["yr"] = ev["date"].dt.year
+    print("=" * 64)
+    print("  WALK-FORWARD: per-year baseline vs +fundamentals (top-10% net R)")
+    print("=" * 64)
+    print(f"  {'year':<6}{'baseline':>10}{'+fund':>10}{'delta':>10}{'trades':>9}")
+    print("  " + "-" * 45)
+    deltas = []
+    for Y in range(2019, int(ev["yr"].max()) + 1):
+        tr = ev[ev["yr"] < Y]; te = ev[ev["yr"] == Y]
+        if len(tr) < 50_000 or len(te) < 5_000:
+            continue
+        b = _net(base, tr, te); a = _net(aug, tr, te)
+        deltas.append(a - b)
+        print(f"  {Y:<6}{b:>+10.4f}{a:>+10.4f}{a-b:>+10.4f}{len(te):>9,}")
+    md = np.mean(deltas); pos = sum(d > 0 for d in deltas)
+    print("  " + "-" * 45)
+    print(f"  mean delta {md:+.4f}R  |  positive in {pos}/{len(deltas)} years")
+    verdict = ("REAL (small) edge -- keep" if md > 0.003 and pos >= len(deltas) * 0.7
+               else "NOISE -- drop it" if abs(md) < 0.003 or pos <= len(deltas) * 0.5
+               else "INCONCLUSIVE")
+    print(f"  VERDICT: {verdict}")
+
+
 def run():
     ev = build()
+    if os.environ.get("WF"):
+        walk_forward(ev); return
     base = FEATURE_COLUMNS + ["setup_score", "setup_code"]
     aug = base + FUND_FACTORS
     print("=" * 70)
