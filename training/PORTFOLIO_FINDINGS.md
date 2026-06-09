@@ -138,3 +138,24 @@ Positive in **6 of 8 years including the 2020 crash** (so not a single-crash art
 but a genuine −0.088R losing year in the 2022 bear. Real, broadly-persistent,
 regime-driven edge — tradeable with risk management, not bulletproof. Next levers:
 R-magnitude objective, and a bear-regime gate/short side to fix the 2022-type weakness.
+
+## UPDATE — ground-up audit, Layer 1 (trade simulation realism): PASS
+
+Before building further, audited the bedrock label (`simulate_trade_forward`). It is
+an idealized *stock* trade (linear P&L, ATR stop/targets/trailing). Instrument decision:
+we trade **stocks + outright (directional) options, not spreads** — so the linear-R
+underlying-move label is the correct signal to optimize (outright options have uncapped
+upside, so the magnitude edge is legitimate; option leverage/decay is a sizing concern).
+
+Two realism gaps, measured (not assumed):
+- **Per-trade cost:** ~0.013R for liquid large-cap stocks (~0.04% of price / ~3% ATR risk).
+  The book's flat −0.015R assumption covers it.
+- **Gap-through stops:** of 376k stop exits, **8.4% gapped through the stop**, avg extra
+  loss **0.34R** when they did → **−0.0056R/trade** spread over all trades (mean R
+  +0.0347 → +0.0291). Worst events −10R to −17R, clustered in crashes.
+
+**Honest all-in cost ≈ 0.019R/trade** — between our −0.015 and −0.03 columns. So the
+**−0.03R column is the honest baseline**, and the edge clears it (round-1 top-10%
+≈ +0.024R net-honest; round-2 ≈ +0.12R). **No re-walk required.** The gap *tail* (rare
+−10R+ events) is an account risk to handle at the **position-sizing layer** (cap per-trade
+exposure), not a labeling problem. Layer 1 verdict: foundation is honest enough to build on.
