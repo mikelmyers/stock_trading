@@ -159,3 +159,31 @@ Two realism gaps, measured (not assumed):
 ≈ +0.024R net-honest; round-2 ≈ +0.12R). **No re-walk required.** The gap *tail* (rare
 −10R+ events) is an account risk to handle at the **position-sizing layer** (cap per-trade
 exposure), not a labeling problem. Layer 1 verdict: foundation is honest enough to build on.
+
+## UPDATE — validated system + CLEAN out-of-sample test (the verdict)
+
+Built the full validated system (`training/validated_sim.py`): regime-aware ML
+model selects the book (top-10% by P(win)), `bear_breakdown` excluded (Layer-2
+dud), honest 0.019R cost (Layer-1), **regime-scaled position sizing** (size down /
+step aside when the tape is below its 200-day and VIX is stretched). Frozen,
+pre-specified design — tuned ONLY on 2019-2023; **2024+ reserved untouched**.
+
+| period | sizing | mean R | CAGR | maxDD | Sharpe |
+|---|---|--:|--:|--:|--:|
+| DEV 2019-2023 | flat | +0.051 | +4.6% | 19% | 1.33 |
+| DEV 2019-2023 | regime | +0.051 | +4.5% | 15% | 1.48 |
+| **CLEAN 2024+** | flat | +0.079 | +8.1% | 15% | 2.18 |
+| **CLEAN 2024+** | regime | +0.079 | +7.7% | 11% | **2.45** |
+
+**The edge SURVIVED the one-shot clean test** — mean R higher OOS than in dev,
+positive every year, not overfit. Regime sizing consistently cuts drawdown and
+raises Sharpe (the validated answer to surviving down years and gap-tails).
+
+**Honest caveats:** the 2024+ window had no 2022-style bear and was carried by a
+strong 2024 (+0.206R; 2025/2026 ~breakeven), so the 2.45 Sharpe / +8% CAGR are
+optimistic. **Through-cycle expectation = the dev ~1.4 Sharpe**, ~+0.05-0.08R/trade,
+~15% drawdowns in bears. Character: a **risk-on harvester** — good in favorable
+tapes, breakeven in flat ones, contained losses in bears (never a down-year
+*profit* engine; three tests confirmed shorting/momentum/index-TF don't reliably
+pay). Last gate before real capital: **forward paper-trading** (the only truly
+out-of-sample test left).
