@@ -1,0 +1,80 @@
+name: Finalize survivorship-free results
+
+# One-shot: the 8-shard run (#27171135775) computed everything and uploaded
+# per-shard checkpoint artifacts, but the collect job's push failed on
+# `git pull --rebase` ("unstaged changes" from the price-cache restore).
+# This reuses those existing artifacts (no re-walking), rebuilds the dataset +
+# holdout, and commits with --autostash so the result actually lands on the
+# branch. Trigger by editing this file.
+
+on:
+  push:
+    branches: ["claude/survivorship-free-validation-resume-os92w2"]
+    paths:
+      - ".github/workflows/finalize_results.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: survivorship-finalize
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  SOURCE_RUN_ID: "27171135775"
+  BR: "claude/survivorship-free-validation-resume-os92w2"
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+          ref: claude/survivorship-free-validation-resume-os92w2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install -q -r requirements.txt -r requirements-ml.txt
+      - name: Restore price cache (from source run)
+        uses: actions/download-artifact@v4
+        with:
+          name: price-cache
+          path: training/cache
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Merge all shard checkpoints (from source run)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sims-shard-*
+          merge-multiple: true
+          path: training/cache/sims_full
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkpoint count
+        run: echo "Checkpoints: $(ls training/cache/sims_full/*.pkl 2>/dev/null | wc -l)/899"
+      - name: Build dataset
+        run: python -m training.ml.dataset --from-checkpoints --out training/ml/datasets/survivorship_free.parquet
+      - name: Run holdout validation
+        run: |
+          python -m training.survivorship.holdout_validation \
+            --dataset training/ml/datasets/survivorship_free.parquet | tee /tmp/holdout.txt
+      - name: Commit results (autostash fixes the prior push failure)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f training/cache/sims_full/ training/ml/datasets/survivorship_free.parquet
+          git commit -m "Finalize: survivorship-free checkpoints + dataset (from run ${SOURCE_RUN_ID})" || echo "nothing to commit"
+          for i in 1 2 3 4 5; do
+            if git -c rebase.autoStash=true pull --rebase origin "$BR" && git push origin "HEAD:$BR"; then
+              echo "pushed results"; break
+            fi
+            sleep $((2 ** i))
+          done
+      - name: Upload holdout report
+        uses: actions/upload-artifact@v4
+        with:
+          name: holdout-report-final
+          path: /tmp/holdout.txt
