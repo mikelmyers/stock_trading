@@ -17,14 +17,19 @@ sandbox (Alpaca host not in its allowlist); run on a GH Action or your machine.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import math
 import os
+import uuid
 from pathlib import Path
 
 import pandas as pd
 import requests
 
 LOG = Path(__file__).resolve().parent / "ml" / "datasets" / "paper_trades.csv"
+# Authoritative submit log: ties each Alpaca order to the signal that spawned it,
+# so reconcile can match fills EXACTLY by order id (not fuzzily by ticker).
+EXEC_LOG = Path(__file__).resolve().parent / "ml" / "datasets" / "executions.csv"
 
 
 def _creds():
@@ -77,8 +82,11 @@ def submit_book(signals: pd.DataFrame, risk_pct: float, live: bool):
             print(f"  {s.ticker:<7}{'buy':<6}{0:>6}{s.entry:>10.2f}{s.stop:>10.2f}"
                   f"{dollar_risk:>9.0f}  skip (stop too wide for 1 share)")
             continue
+        # unique, traceable id so the fill can be matched back to THIS signal
+        coid = f"sig-{s.ticker}-{getattr(s, 'asof', 'na')}-{uuid.uuid4().hex[:8]}"
         order = {"symbol": s.ticker, "qty": qty, "side": "buy", "type": "market",
                  "time_in_force": "gtc", "order_class": "oto",
+                 "client_order_id": coid,
                  "stop_loss": {"stop_price": round(s.stop, 2)}}
         status = "DRY-RUN"
         if live:
@@ -86,11 +94,26 @@ def submit_book(signals: pd.DataFrame, risk_pct: float, live: bool):
                 resp = requests.post(f"{base}/v2/orders", headers=_headers(kid, sec),
                                      json=order, timeout=20)
                 resp.raise_for_status()
-                status = f"submitted id={resp.json()['id'][:8]}"
+                oid = resp.json()["id"]
+                status = f"submitted id={oid[:8]}"
+                _record_execution(s, qty, coid, oid)
             except Exception as e:
                 status = f"ERROR {getattr(e,'response',None) and e.response.text or e}"[:40]
         print(f"  {s.ticker:<7}{'buy':<6}{qty:>6}{s.entry:>10.2f}{s.stop:>10.2f}"
               f"{qty*per_share:>9.0f}  {status}")
+
+
+def _record_execution(s, qty, client_order_id, order_id):
+    """Append one submitted order to executions.csv (the signal<->order bridge)."""
+    row = pd.DataFrame([{
+        "submitted_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "client_order_id": client_order_id, "order_id": order_id,
+        "asof": getattr(s, "asof", ""), "ticker": s.ticker,
+        "setup": getattr(s, "setup", ""), "qty": qty,
+        "entry_signal": s.entry, "stop": s.stop,
+        "model_p": getattr(s, "model_p", ""),
+    }])
+    row.to_csv(EXEC_LOG, mode="a", header=not EXEC_LOG.exists(), index=False)
 
 
 def main(argv=None):

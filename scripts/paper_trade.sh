@@ -15,11 +15,17 @@ export APCA_API_BASE_URL="${APCA_API_BASE_URL:-https://paper-api.alpaca.markets}
 LIVE=""; [ "${1:-}" = "--live" ] && LIVE="--live"
 RISK="${RISK:-1.0}"   # %% equity risk per trade (the validated 1% default)
 
-echo "== 1/3  generate today's book (FRESH data) =="
-python -m training.live_signals --refresh --top 10 --risk "$RISK"
-
-echo "== 2/3  verify Alpaca paper connection =="
+echo "== 1/4  verify Alpaca paper connection =="
 python -m training.alpaca_exec --selftest
 
-echo "== 3/3  ${LIVE:-(dry-run -- no orders sent)}  submit =="
+echo "== 2/4  manage exits on OPEN positions (sell winners/laggards per the rules) =="
+python -m training.manage_exits $LIVE
+
+echo "== 3/4  generate today's book (FRESH data) =="
+python -m training.live_signals --refresh --top 10 --risk "$RISK"
+
+echo "== 4/4  ${LIVE:-(dry-run -- no orders sent)}  submit new entries =="
 python -m training.alpaca_exec --from-log --risk "$RISK" $LIVE
+
+echo "== reconcile: live fills vs logged signals vs expectation =="
+python -m training.reconcile || true
