@@ -57,8 +57,15 @@ def scan(top: int, risk_pct: float):
     asof = max(df.index[-1] for df in hist.values() if len(df))
 
     cands = []
+    stale = 0
     for tk, df in hist.items():
         if tk in ("^GSPC", "^VIX") or len(df) < 260:
+            continue
+        # LIVE means currently listed: skip names whose last bar isn't recent
+        # (the survivorship-free universe carries 334 delisted names whose last
+        # bar is their delisting day -- great for backtests, untradeable today).
+        if (asof - df.index[-1]).days > 7:
+            stale += 1
             continue
         feats = compute_feature_frame(df, market=market)
         frow = feats.iloc[-1]
@@ -95,6 +102,7 @@ def scan(top: int, risk_pct: float):
     print("=" * 74)
     print(f"  Regime: S&P>200d={'Y' if mk_last['mkt_above_sma200']>0.5 else 'N'}  "
           f"VIX z-score={mk_last['vix_z_252']:+.2f}  -> {'RISK-ON (full size)' if regime_ok else 'CAUTION (size down / stand aside)'}")
+    print(f"  ({stale} delisted/stale names skipped -- not currently tradeable)")
     print(f"  {len(cands)} setups cleared the model; showing top {len(book)}:\n")
     print(f"  {'ticker':<7}{'setup':<15}{'bias':<9}{'entry':>9}{'stop':>9}{'risk%':>7}{'P(win)':>8}")
     print("  " + "-" * 62)
