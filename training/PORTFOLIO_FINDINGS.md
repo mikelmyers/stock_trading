@@ -331,3 +331,22 @@ signal, but too small to justify a production fundamentals-join dependency + 78%
 coverage gap. **Verdict: don't add to the live system on one marginal holdout.** A
 walk-forward (per-year delta) is the tiebreaker between "tiny real edge" and "noise";
 absent that, skip it. The validated timing system stands as the deliverable.
+
+## UPDATE — walk-forward tiebreaker: fundamentals features are NOISE (definitive)
+
+Per-year delta (baseline vs +fundamentals, top-10% net R, retrained each year):
+2019 +0.011 · 2020 +0.031 · 2021 -0.021 · 2022 -0.032 · 2023 +0.008 · 2024 -0.015
+· 2025 +0.006 · 2026 -0.012.  **Mean -0.0029R, positive in 4/8 years → NOISE, drop.**
+
+The +0.0034R single-holdout bump was a favorable-draw illusion; over a proper
+walk-forward fundamentals net slightly NEGATIVE (and hurt in 2022/2021/2024). The
+walk-forward did its job: avoided adding a fragile production fundamentals
+dependency for a phantom edge.
+
+**"Make it bigger" thread CLOSED with data — all accessible levers ruled out:**
+(1) cross-sectional price-only = no skill; (2) cross-sectional + fundamentals =
+weak (IC +0.009, ~market); (3) fundamentals as features = noise. The free SEC
+fundamental axis (classic value/quality/growth) adds no tradeable edge; the
+stronger factors (estimate revisions, earnings surprise) need paid, crowded data.
+**Our edge is the regime TIMING; the validated event-driven system is the
+deliverable.** Forward paper-trading remains the only un-run gate.
