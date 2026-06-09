@@ -178,9 +178,11 @@ def sizing_study(book: pd.DataFrame, seed: float, k: int):
     print("  POSITION-SIZING / RISK-OF-RUIN STUDY (on the blind realized book)")
     print("=" * 70)
     print(f"  {len(R)} trades, {tpy:.0f}/yr, mean R {R.mean():+.4f}, win {np.mean(R>0)*100:.0f}%")
-    print(f"  Single-bet Kelly fraction: {kelly*100:.1f}% of equity risked per trade.")
-    print(f"  But you hold up to K={k} at once -> full-Kelly total exposure would be "
-          f"~{kelly*k*100:.0f}%. Use a FRACTION of Kelly (¼-½) for survivable drawdowns.")
+    print(f"  Single-bet Kelly fraction: {kelly*100:.1f}% -- IGNORE THIS AS A SIZING TARGET.")
+    print(f"  Kelly assumes INDEPENDENT SEQUENTIAL bets. You hold K={k} CORRELATED "
+          f"positions\n  at once (same market/regime -> they lose together), which destroys the "
+          f"Kelly\n  math. Trust the REALIZED drawdown column below (actual concurrent trades),"
+          f"\n  NOT Kelly -- over-betting a naive Kelly is how accounts blow up.")
     print(f"\n  {'risk/trade':>10} | {'CAGR':>7} | {'realDD':>7} | {'P(DD>30%)':>9} | {'P(DD>50%)':>9}")
     print("  " + "-" * 56)
     rng = np.random.default_rng(7)
@@ -195,10 +197,10 @@ def sizing_study(book: pd.DataFrame, seed: float, k: int):
         print(f"  {rf*100:>9.2f}% | {m['cagr']*100:>6.1f}% | {m['max_dd']*100:>6.0f}% | "
               f"{np.mean(dd>=0.30)*100:>8.0f}% | {np.mean(dd>=0.50)*100:>8.0f}%"
               + (flag if abs(rf-kelly)<0.0026 else ""))
-    halfk = kelly / 2
-    print(f"\n  RECOMMENDATION: full Kelly ({kelly*100:.1f}%) maximizes growth but with "
-          f"brutal drawdowns.\n  Trade ~¼-½ Kelly ({kelly/4*100:.2f}-{halfk*100:.2f}% risk/trade) "
-          f"for near-optimal growth at\n  a fraction of the drawdown/ruin risk -- the survivable choice.")
+    print("\n  RECOMMENDATION (concurrency-aware, from the realized column):")
+    print("    Start at 1% risk/trade (~5% CAGR, ~15% DD, 0% ruin). Go to 2% only if a")
+    print("    ~30% drawdown is genuinely survivable for you. 3%+ courts ruin. Size so a")
+    print(f"    simultaneous K={k}-position gap against you is a loss you can shrug off.")
 
 
 def run(clean_test: bool, seed: float, k: int, per_type: int, base_frac: float,
