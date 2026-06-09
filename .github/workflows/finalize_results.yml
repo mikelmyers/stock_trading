@@ -66,8 +66,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f training/cache/sims_full/ training/ml/datasets/survivorship_free.parquet
-          git commit -m "Finalize: survivorship-free checkpoints + dataset (from run ${SOURCE_RUN_ID})" || echo "nothing to commit"
+          # Only the per-ticker checkpoints (small blobs). The dataset parquet is
+          # 271 MB > GitHub's 100 MB push limit and is gitignored + regenerable
+          # from these checkpoints in ~2.5 min, so it is intentionally not committed.
+          git add -f training/cache/sims_full/
+          git commit -m "Finalize: survivorship-free checkpoints (from run ${SOURCE_RUN_ID})" || echo "nothing to commit"
           for i in 1 2 3 4 5; do
             if git -c rebase.autoStash=true pull --rebase origin "$BR" && git push origin "HEAD:$BR"; then
               echo "pushed results"; break
