@@ -187,3 +187,33 @@ tapes, breakeven in flat ones, contained losses in bears (never a down-year
 *profit* engine; three tests confirmed shorting/momentum/index-TF don't reliably
 pay). Last gate before real capital: **forward paper-trading** (the only truly
 out-of-sample test left).
+
+## UPDATE — walk-forward BLIND money test (the most honest number)
+
+Ran the strictest historical test (`validated_sim.py --walk-forward`): for each
+year 2019-2026, retrain on ONLY prior years, set the entry threshold from the
+training distribution (no peeking), trade that year blind, compound one account.
+
+| sizing | mean R | CAGR | maxDD | Sharpe | $10k → |
+|---|--:|--:|--:|--:|--:|
+| flat | +0.069 | +5.4% | 15% | **1.87** | $14,711 |
+| regime-scaled | +0.069 | +4.3% | 15% | 1.71 | $13,634 |
+
+Per-year R: 2019 +0.145 · 2020 +0.049 · 2021 +0.070 · **2022 −0.127** · 2023
++0.109 · 2024 +0.178 · 2025 +0.005 · 2026 −0.010. Positive 6/8 years, blind.
+
+**Edge confirmed under the hardest test** — Sharpe 1.87, lands between dev (+0.051R)
+and clean (+0.079R); the consistency across three independent tests is the real
+evidence. The model **self-throttled** in danger years (only 593 signals passed in
+2020, 791 in 2022, vs 2,700+ in calm years) — desired behavior — yet still lost in
+2022, confirming bears are a managed drawdown, not beatable.
+
+**Honest correction:** regime-scaled sizing HELPED in dev + clean test but HURT
+here (Sharpe 1.71 < 1.87, same maxDD) → it is **roughly neutral**, a marginal
+risk-smoother, not a clear win. Flat sizing is the honest baseline.
+
+**FINAL CHARACTER (validated 6 ways):** a real, modest, risk-on edge — ~+0.07R/trade,
+Sharpe ~1.8, ~80-100 trades/yr, ~15% drawdowns, positive ~75% of years. ~5% CAGR at
+1%/trade, ~10-13% at 2-2.5%/trade (~25-30% DD). Good in decent tapes, breakeven in
+flat/bear years, doesn't blow up (self-throttles + size for gap-tails). Last gate
+before real capital: **live-forward paper trading.**
