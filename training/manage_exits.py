@@ -1,25 +1,20 @@
 """Live exit manager — sells per the VALIDATED backtester rules, automatically.
 
 Run daily. For each open Alpaca position it replays `backtester.simulate_trade_forward`'s
-exit logic on the daily bars since entry and, if an exit has triggered, closes the
-position at market. This removes the after-the-fact / emotional sell decision and
-makes live behavior match what produced the +0.07R edge.
-
-Exits implemented (long side):
-  * HARD_STOP  -1R  -> already live as the Alpaca bracket stop (reported here)
-  * TRAILING_STOP   -> 2x ATR below the high-water mark, armed once +1R is tagged
-  * TIME_STOP       -> from day 10, exit if total return < 0.25R (a laggard)
-  * MAX_HOLD        -> force-close at 14 trading days
-Scale-outs at +1R/+2R are a documented v2 refinement (they ladder HOW winners are
-sold; trailing/max-hold already ensure winners ARE sold). Stateless replay = robust.
+long-side exit logic on the daily bars since entry and brings the live position to the
+target state: scale out 33% at +1R and 33% at +2R, trail the runner at 2x ATR (armed
+once +1R is tagged), TIME_STOP laggards from day 10, MAX_HOLD at 14 days. The -1R hard
+stop rests as the Alpaca bracket; after each scale-out the stop is re-placed for the
+remaining shares. Stateless replay (original qty taken from the buy's filled_qty) =>
+robust across days and matches the +0.07R numbers.
 
     python -m training.manage_exits           # DRY-RUN (no orders)
-    python -m training.manage_exits --live      # close positions that should exit
+    python -m training.manage_exits --live      # bring positions to target state
 """
 from __future__ import annotations
 
 import argparse
-import datetime as dt
+import math
 
 import pandas as pd
 import requests
@@ -29,129 +24,149 @@ from training.alpaca_exec import EXEC_LOG, LOG, _creds, _get, _headers
 from training.backtester import MAX_HOLDING_DAYS
 
 TRAIL_ATR_MULT = 2.0
+SCALE_PCT = 0.33                 # fraction of ORIGINAL position sold at each target
 
 
 def _resolve(ticker: str, pos: dict) -> dict | None:
-    """entry, stop, entry_date, qty for an open position — executions.csv first,
-    then Alpaca's filled buy order + paper_trades.csv stop (covers pre-log trades)."""
-    qty = float(pos["qty"])
+    """entry, stop, entry_date, orig_qty (entry size), cur_qty (now)."""
+    cur_qty = float(pos["qty"])
     if EXEC_LOG.exists():
         e = pd.read_csv(EXEC_LOG)
         e = e[e["ticker"] == ticker].sort_values("submitted_at")
         if len(e):
             r = e.iloc[-1]
             return {"entry": float(r["entry_signal"]), "stop": float(r["stop"]),
-                    "entry_date": pd.to_datetime(r["submitted_at"]).date(), "qty": qty}
-    # fallback: latest filled buy from Alpaca + stop from the signal log
+                    "entry_date": pd.to_datetime(r["submitted_at"]).date(),
+                    "orig_qty": float(r["qty"]), "cur_qty": cur_qty}
+    # fallback for pre-log positions: filled buy order + signal-log stop
     orders = _get("/v2/orders", status="all", limit=200)
-    buys = [o for o in orders if o["symbol"] == ticker and o["side"] == "buy"
-            and o.get("filled_at")]
+    buys = [o for o in orders if o["symbol"] == ticker and o["side"] == "buy" and o.get("filled_at")]
     stop = None
     if LOG.exists():
-        log = pd.read_csv(LOG).sort_values("asof")
-        s = log[log["ticker"] == ticker]["stop"]
+        s = pd.read_csv(LOG).sort_values("asof")
+        s = s[s["ticker"] == ticker]["stop"]
         stop = float(s.iloc[-1]) if len(s) else None
     if not buys or stop is None:
         return None
     b = sorted(buys, key=lambda o: o["filled_at"])[-1]
     return {"entry": float(b["filled_avg_price"]), "stop": stop,
-            "entry_date": pd.to_datetime(b["filled_at"]).date(), "qty": qty}
+            "entry_date": pd.to_datetime(b["filled_at"]).date(),
+            "orig_qty": float(b["filled_qty"]), "cur_qty": cur_qty}
 
 
 def _replay(entry: float, stop: float, bars: pd.DataFrame, atr: pd.Series):
-    """Replay the long-side exit logic over bars AFTER entry. Returns
-    (should_exit, reason, day_offset)."""
+    """Return (exit_all, reason, remaining_fraction). Long side."""
     risk = entry - stop
     if risk <= 0:
-        return (False, "BAD_RISK", 0)
-    t1 = entry + risk
-    armed = False
-    extreme = entry
-    trailing = stop
+        return (False, "BAD_RISK", 1.0)
+    t1, t2 = entry + risk, entry + 2 * risk
+    scale1 = scale2 = armed = False
+    frac, realized_r, extreme, trailing = 1.0, 0.0, entry, stop
     for d in range(min(len(bars), MAX_HOLDING_DAYS)):
-        day_offset = d + 1
+        day = d + 1
         high, low, close = (float(bars.iloc[d]["High"]), float(bars.iloc[d]["Low"]),
                             float(bars.iloc[d]["Close"]))
         if low <= stop:
-            return (True, "HARD_STOP", day_offset)        # Alpaca handles, reported
-        if close >= t1:
+            return (True, "HARD_STOP", 0.0)
+        if close >= t1 and not scale1:
+            scale1, armed = True, True
+            frac -= SCALE_PCT; realized_r += SCALE_PCT * 1.0; extreme = max(extreme, close)
+        if close >= t2 and not scale2:
+            scale2 = True
+            frac -= SCALE_PCT; realized_r += SCALE_PCT * 2.0; extreme = max(extreme, close)
+        if armed or close >= t1:
             armed = True
-            extreme = max(extreme, close)
-        if armed:
             a = float(atr.loc[bars.index[d]]) if bars.index[d] in atr.index else risk
             extreme = max(extreme, close)
             trailing = max(trailing, extreme - a * TRAIL_ATR_MULT)
             if low <= trailing and trailing > stop:
-                return (True, "TRAILING_STOP", day_offset)
-        if day_offset >= 10:
-            total_r = (close - entry) / risk                # laggard check
+                return (True, "TRAILING_STOP", 0.0)
+        if day >= 10:
+            total_r = realized_r + (close - entry) / risk * frac
             if total_r < 0.25:
-                return (True, "TIME_STOP", day_offset)
+                return (True, "TIME_STOP", 0.0)
     if len(bars) >= MAX_HOLDING_DAYS:
-        return (True, "MAX_HOLD", MAX_HOLDING_DAYS)
-    return (False, "HOLD", len(bars))
+        return (True, "MAX_HOLD", 0.0)
+    return (False, "HOLD", round(frac, 2))
 
 
-def _bars_since(ticker: str, entry_date) -> tuple[pd.DataFrame, pd.Series]:
+def _bars_since(ticker: str, entry_date):
     import yfinance as yf
-    start = pd.Timestamp(entry_date) - pd.Timedelta(days=40)
-    df = yf.Ticker(ticker).history(start=start.date().isoformat(), auto_adjust=False)
+    start = (pd.Timestamp(entry_date) - pd.Timedelta(days=40)).date().isoformat()
+    df = yf.Ticker(ticker).history(start=start, auto_adjust=False)
     if df.empty:
         return df, pd.Series(dtype=float)
     df.index = pd.to_datetime(df.index).tz_localize(None).normalize()
     atr = calculate_atr(df, 14)
-    after = df[df.index > pd.Timestamp(entry_date).normalize()]
-    return after, atr
+    return df[df.index > pd.Timestamp(entry_date).normalize()], atr
 
 
-def _close(base, hdr, symbol, qty, live):
+def _cancel_open(base, hdr, symbol):
+    for o in _get("/v2/orders", status="open", symbols=symbol):
+        requests.delete(f"{base}/v2/orders/{o['id']}", headers=hdr, timeout=20)
+
+
+def _order(base, hdr, body, live):
     if not live:
         return "DRY-RUN"
     try:
-        # cancel the lingering bracket stop, then market-sell the position
-        for o in _get("/v2/orders", status="open", symbols=symbol):
-            requests.delete(f"{base}/v2/orders/{o['id']}", headers=hdr, timeout=20)
-        order = {"symbol": symbol, "qty": qty, "side": "sell", "type": "market",
-                 "time_in_force": "day"}
-        r = requests.post(f"{base}/v2/orders", headers=hdr, json=order, timeout=20)
+        r = requests.post(f"{base}/v2/orders", headers=hdr, json=body, timeout=20)
         r.raise_for_status()
-        return f"SOLD id={r.json()['id'][:8]}"
+        return f"ok id={r.json()['id'][:8]}"
     except Exception as e:
-        return f"ERROR {getattr(e,'response',None) and e.response.text or e}"[:40]
+        return f"ERR {getattr(e,'response',None) and e.response.text or e}"[:36]
 
 
 def manage(live: bool):
     kid, sec, base = _creds()
     hdr = _headers(kid, sec)
     positions = [p for p in _get("/v2/positions") if float(p["qty"]) > 0]
-    print("=" * 64)
+    print("=" * 70)
     print(f"  EXIT MANAGER  ({'LIVE' if live else 'DRY-RUN'})  — {len(positions)} open positions")
-    print("=" * 64)
-    print(f"  {'ticker':<7}{'days':>5}{'entry':>9}{'last':>9}{'R':>7}  decision")
-    print("  " + "-" * 56)
+    print("=" * 70)
+    print(f"  {'ticker':<7}{'day':>4}{'entry':>9}{'last':>9}{'R':>6}  decision")
+    print("  " + "-" * 60)
     for p in positions:
         tk = p["symbol"]
         info = _resolve(tk, p)
         if not info:
-            print(f"  {tk:<7}{'?':>5}  could not resolve entry/stop — skipped")
+            print(f"  {tk:<7}{'?':>4}  could not resolve entry/stop — skipped")
             continue
         bars, atr = _bars_since(tk, info["entry_date"])
-        days = len(bars)
         last = float(p["current_price"])
-        r_now = (last - info["entry"]) / (info["entry"] - info["stop"]) if info["entry"] != info["stop"] else float("nan")
-        do_exit, reason, _ = _replay(info["entry"], info["stop"], bars, atr)
-        if do_exit and reason == "HARD_STOP":
-            note = "stop (Alpaca handles)"          # don't double-submit
-        elif do_exit:
-            note = f"EXIT [{reason}] -> {_close(base, hdr, tk, info['qty'], live)}"
+        risk = info["entry"] - info["stop"]
+        r_now = (last - info["entry"]) / risk if risk else float("nan")
+        exit_all, reason, frac = _replay(info["entry"], info["stop"], bars, atr)
+        cur = info["cur_qty"]
+
+        if exit_all and reason == "HARD_STOP":
+            note = "stop resting at Alpaca (no action)"
+        elif exit_all:
+            _cancel_open(base, hdr, tk)
+            st = _order(base, hdr, {"symbol": tk, "qty": cur, "side": "sell",
+                                    "type": "market", "time_in_force": "day"}, live)
+            note = f"EXIT ALL [{reason}] {cur:g}sh -> {st}"
         else:
-            note = f"hold (day {days}/{MAX_HOLDING_DAYS})"
-        print(f"  {tk:<7}{days:>5}{info['entry']:>9.2f}{last:>9.2f}{r_now:>7.2f}  {note}")
+            target = math.floor(info["orig_qty"] * frac)
+            sell_qty = cur - target
+            if sell_qty >= 1:
+                lvl = "+1R" if frac > 0.5 else "+2R"
+                _cancel_open(base, hdr, tk)
+                st = _order(base, hdr, {"symbol": tk, "qty": int(sell_qty), "side": "sell",
+                                        "type": "market", "time_in_force": "day"}, live)
+                if target >= 1:   # re-place the hard stop on the runner
+                    _order(base, hdr, {"symbol": tk, "qty": int(target), "side": "sell",
+                                       "type": "stop", "stop_price": round(info["stop"], 2),
+                                       "time_in_force": "gtc"}, live)
+                note = f"SCALE {lvl}: sell {int(sell_qty)}sh, hold {target}sh -> {st}"
+            else:
+                note = f"hold {cur:g}sh (day {len(bars)}/{MAX_HOLDING_DAYS}, frac {frac})"
+        print(f"  {tk:<7}{len(bars):>4}{info['entry']:>9.2f}{last:>9.2f}{r_now:>6.2f}  {note}")
 
 
 def main(argv=None):
     p = argparse.ArgumentParser()
-    p.add_argument("--live", action="store_true", help="actually submit sells (default dry-run)")
+    p.add_argument("--live", action="store_true", help="bring positions to target (default dry-run)")
     a = p.parse_args(argv)
     manage(a.live)
     return 0
