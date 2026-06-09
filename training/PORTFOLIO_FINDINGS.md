@@ -217,3 +217,44 @@ Sharpe ~1.8, ~80-100 trades/yr, ~15% drawdowns, positive ~75% of years. ~5% CAGR
 1%/trade, ~10-13% at 2-2.5%/trade (~25-30% DD). Good in decent tapes, breakeven in
 flat/bear years, doesn't blow up (self-throttles + size for gap-tails). Last gate
 before real capital: **live-forward paper trading.**
+
+## UPDATE — deployment toolchain + GO-LIVE PROTOCOL (closing section)
+
+Two tools now operationalize everything above:
+- `training/validated_sim.py` — validated system, clean OOS test, blind
+  walk-forward money test, and sizing/risk-of-ruin study.
+- `training/live_signals.py` — forward paper-trade harness: trains the deployment
+  model on all history, scans currently-listed names (delisted/stale skipped),
+  scores with the validated pipeline, prints today's regime-aware book, and
+  appends dated signals to `paper_trades.csv` (an ungameable forward record).
+  `--lookback N` backfills recent signals to seed the log.
+
+**Sizing — the rule that prevents another blow-up:** single-bet Kelly computes to
+~20%, but that is a TRAP — Kelly assumes independent sequential bets; you hold K=5
+CORRELATED positions that lose together, which destroys the math. Anchor on the
+*realized* drawdown of the blind book instead:
+
+| risk/trade | CAGR | drawdown | verdict |
+|---|--:|--:|---|
+| **1%** | ~5% | ~15% | START HERE (0% ruin) |
+| 2% | ~10% | ~30% | aggressive but survivable |
+| 3%+ | 14%+ | 41%+ | courts ruin — don't |
+
+Size so a simultaneous K-position overnight gap is a loss you can shrug off.
+
+**GO-LIVE PROTOCOL (the disciplined path — this is what the $18k lesson buys):**
+1. Run `live_signals.py` daily on FRESH data for 2-3 months → real forward record.
+2. Score it vs the blind expectation (~+0.07R/trade, Sharpe ~1.8). Proceed only
+   if it holds; a forward miss means stop, not size up.
+3. Go live at **1% risk/trade** (not Kelly). Scale only after live confirmation.
+4. Open items before scaling size: honest options P&L for the credit_put trades
+   (the linear-R label flatters capped option payoffs), and a retrain cadence.
+
+**Known caveats carried forward (eyes open):** edge is regime-dependent (loses in
+grinding bears like 2022 — survive via sizing, don't try to beat it); shorting /
+down-year profit is a proven loser here (3 tests); current live signals skew to
+index-ETF credit_put (concentrated single bet + the weakest-modeled instrument).
+
+**Bottom line:** a real, modest, honestly-sized, forward-testable long/risk-on
+strategy — Sharpe ~1.8 through-cycle, ~5% CAGR at 1%/trade — with the tooling to
+keep it honest. Not a money-printer; a survivable edge that won't blow up.
