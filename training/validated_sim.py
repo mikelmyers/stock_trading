@@ -105,6 +105,53 @@ def equity_curve(book: pd.DataFrame, seed: float, base_frac: float):
             "yrs": yrs, "trades_yr": len(book) / yrs}
 
 
+def walk_forward_blind(seed: float, k: int, per_type: int, base_frac: float,
+                       p_floor_q: float, start_year: int = 2019):
+    """True blind money test: for each year, train ONLY on prior years, set the
+    entry threshold from the TRAINING distribution (no peeking), trade that year
+    blind, and compound one continuous account. Mirrors real deployment
+    (retrain annually, trade forward)."""
+    df = pd.read_parquet(DATASET)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df[~df["setup_type"].isin(DEAD_SETUPS)].copy()
+    df["setup_code"] = df["setup_type"].astype("category").cat.codes
+    df["close"] = df["date"] + pd.to_timedelta(df["days_held"], "D")
+    last_year = df["date"].dt.year.max()
+
+    parts = []
+    print("=" * 70)
+    print("  VALIDATED SYSTEM -- WALK-FORWARD BLIND MONEY TEST")
+    print("=" * 70)
+    for Y in range(start_year, last_year + 1):
+        train = df[df["date"] < f"{Y}-01-01"]
+        if len(train) < 50_000:
+            continue
+        model, fc = _fit_model(train)
+        # blind threshold: 90th pct of model P on the TRAINING set (known in advance)
+        p_tr = model.predict_proba(train[fc].to_numpy("float64"))[:, 1]
+        floor = float(np.quantile(p_tr, p_floor_q))
+        yr = df[(df["date"] >= f"{Y}-01-01") & (df["date"] < f"{Y+1}-01-01")].copy()
+        if yr.empty:
+            continue
+        yr["p"] = model.predict_proba(yr[fc].to_numpy("float64"))[:, 1]
+        yr = yr[yr["p"] >= floor]
+        parts.append(yr)
+        print(f"  {Y}: trained on {len(train):,} prior rows  |  blind P-floor={floor:.3f}  "
+              f"|  {len(yr):,} signals passed")
+
+    pool = pd.concat(parts).sort_values("date").reset_index(drop=True)
+    for label, regime in [("flat sizing", False), ("regime-scaled sizing", True)]:
+        book = select_and_size(pool, k, per_type, -1.0, regime)  # floor already applied
+        m = equity_curve(book, seed, base_frac)
+        peryr = book.assign(yr=book["date"].dt.year).groupby("yr")["R"].mean()
+        print(f"\n  [{label}]  {len(book):,} trades ({m['trades_yr']:.0f}/yr), "
+              f"mean R {book['R'].mean():+.4f}")
+        print(f"    CAGR {m['cagr']*100:+.1f}%  | maxDD {m['max_dd']*100:.0f}%  | "
+              f"Sharpe {m['sharpe']:.2f}  | final ${m['final']:,.0f} on ${seed:,.0f}")
+        print("    per-year mean R: " + "  ".join(
+            f"{y}:{r:+.3f}" for y, r in peryr.items()))
+
+
 def run(clean_test: bool, seed: float, k: int, per_type: int, base_frac: float,
         p_floor_q: float):
     df = pd.read_parquet(DATASET)
@@ -148,8 +195,13 @@ def main(argv=None):
     p.add_argument("--per-type", type=int, default=2)
     p.add_argument("--base-frac", type=float, default=0.01, help="base risk/trade")
     p.add_argument("--p-floor-q", type=float, default=0.90, help="only trade top (1-q) by model P")
+    p.add_argument("--walk-forward", action="store_true",
+                   help="blind money test: retrain annually, trade forward, compound one account")
     a = p.parse_args(argv)
-    run(a.clean_test, a.seed, a.k, a.per_type, a.base_frac, a.p_floor_q)
+    if a.walk_forward:
+        walk_forward_blind(a.seed, a.k, a.per_type, a.base_frac, a.p_floor_q)
+    else:
+        run(a.clean_test, a.seed, a.k, a.per_type, a.base_frac, a.p_floor_q)
     return 0
 
 
