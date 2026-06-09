@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -84,6 +85,7 @@ class RunnerState:
     trades_today: int = 0
     open_positions: int = 0
     locked_until: Optional[str] = None       # iso ts; trading blocked until then
+    synced_date: str = ""                    # last date broker equity anchored the day
 
     @classmethod
     def load(cls, episode_id: str, equity: float) -> "RunnerState":
@@ -101,7 +103,26 @@ class RunnerState:
 
     def save(self):
         STATE_DIR.mkdir(parents=True, exist_ok=True)
-        (STATE_DIR / f"state_{self.episode_id}.json").write_text(json.dumps(asdict(self), indent=2))
+        path = STATE_DIR / f"state_{self.episode_id}.json"
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(asdict(self), indent=2))
+        os.replace(tmp, path)  # atomic: a crash mid-write can't corrupt state
+
+    def sync_with_broker(self, broker_equity: float, open_position_count: int):
+        """Replace gate inputs with broker truth each cycle.
+
+        The local counters drift (entries that never filled, stops that filled
+        at the broker, manual trades), and equity as a CLI constant means the
+        daily-loss limit can never fire. daily_pnl derived from broker equity
+        includes unrealized P&L — the conservative measure for a circuit breaker.
+        """
+        self.equity = broker_equity
+        self.open_positions = open_position_count
+        if self.synced_date != self.date:    # first sync of the day anchors it
+            self.day_start_equity = broker_equity
+            self.synced_date = self.date
+        self.daily_pnl = broker_equity - self.day_start_equity
+        self.save()
 
     def register_outcome(self, pnl_dollars: float, r_multiple: float, cfg: RiskConfig, now=None):
         """Update streak/pnl/locks after a trade closes."""

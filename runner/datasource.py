@@ -62,11 +62,17 @@ class DataSource:
     def scan(self) -> list[C.ConditionVector]:
         mso, reg = self.minutes_since_open(), self.regime()
         out = []
+        errors = 0
         for sym in self.movers():
             try:
                 out.append(_build_cv(sym, self.snapshot(sym), mso, reg))
-            except Exception:
-                continue
+            except Exception as e:
+                # never silent: an auth/rate-limit failure must not look like
+                # "scanned 0 candidates" while the loop runs blind
+                errors += 1
+                print(f"    scan error {sym}: {e!r}"[:120])
+        if errors:
+            print(f"    ({errors} symbols failed to scan)")
         return out
 
 
@@ -135,17 +141,24 @@ class AlpacaSource(DataSource):
         return [m["symbol"] for m in j.get("gainers", [])]
 
     def snapshot(self, symbol):
+        import datetime as dt
         snap = self._get(f"{self.DATA}/v2/stocks/{symbol}/snapshot")
         day, prev = snap.get("dailyBar", {}), snap.get("prevDailyBar", {})
         q = snap.get("latestQuote", {})
+        trade = snap.get("latestTrade", {})
         daily = self._get(f"{self.DATA}/v2/stocks/{symbol}/bars",
                           timeframe="1Day", limit=21).get("bars", [])
         avg20 = sum(b["v"] for b in daily[:-1]) / max(len(daily) - 1, 1) if daily else None
         mins = self._get(f"{self.DATA}/v2/stocks/{symbol}/bars",
                          timeframe="1Min", limit=60).get("bars", [])
         news = self._get(f"{self.DATA}/v1beta1/news", symbols=symbol, limit=5).get("news", [])
+        # asof = the SCAN time. dailyBar.t is the bar's 4am open timestamp,
+        # constant all day — using it made the labeler measure MFE over
+        # midnight-2am and collapsed every intraday scan to one row.
+        # price = last trade, not the (possibly minutes-stale) daily-bar close.
         return dict(
-            asof=day.get("t", ""), price=day.get("c"), prev_close=prev.get("c"),
+            asof=dt.datetime.now(dt.timezone.utc).isoformat(),
+            price=trade.get("p") or day.get("c"), prev_close=prev.get("c"),
             day_open=day.get("o"), vol_today=day.get("v"), avg_vol_20d=avg20,
             float_shares=self.float_provider(symbol), bid=q.get("bp"), ask=q.get("ap"),
             news=news, catalyst_type=_catalyst_type(news), halts_today=None,
@@ -154,9 +167,8 @@ class AlpacaSource(DataSource):
         )
 
     def minutes_since_open(self):
-        import datetime as dt
-        now = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=4)   # ~ET
-        return max((now.hour * 60 + now.minute) - (9 * 60 + 30), 0)
+        from runner import clock
+        return clock.minutes_since_open()
 
     def regime(self):
         return None
