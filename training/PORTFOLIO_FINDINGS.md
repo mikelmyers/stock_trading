@@ -312,3 +312,22 @@ analyst data this set lacks.
 fold these fundamental factors in as EXTRA FEATURES on the proven event-driven
 timing model (does "cheap + quality" sharpen the +0.077R "when" edge?) — reuses the
 validated framework, point-in-time join on ticker+date. That's the next cheap test.
+
+## UPDATE — fundamentals as FEATURES on the timing model: marginal (+0.0034R), below the bar
+
+Point-in-time joined the SEC-XBRL fundamentals + price onto the event-driven setups
+(682k setups 2013+, 78% fundamental coverage) and ran baseline vs +fundamentals on
+the same 2019+ holdout (`training/augment_fundamentals.py`).
+
+| model | top-10% net R | win% | OOS-AUC |
+|---|--:|--:|--:|
+| baseline (33 feats) | +0.0666 | 58.5% | 0.5174 |
+| + 12 fundamental factors | +0.0700 | 59.0% | 0.5185 |
+
+**Delta +0.0034R — NEUTRAL, below the noise floor for a single holdout** (AUC barely
+moved). Factors used are sensible (rev_growth, asset_growth, sales/price, size,
+cash-flow/price). Direction positive, consistent with the weak cross-sectional
+signal, but too small to justify a production fundamentals-join dependency + 78%
+coverage gap. **Verdict: don't add to the live system on one marginal holdout.** A
+walk-forward (per-year delta) is the tiebreaker between "tiny real edge" and "noise";
+absent that, skip it. The validated timing system stands as the deliverable.
