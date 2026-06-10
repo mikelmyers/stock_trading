@@ -45,6 +45,11 @@ class TrainingProfile:
     early_stop_real_setups: int | None = None
     chunk_size: int = 24
     slippage_levels: list[float] | None = None
+    # Label realism (see simulate_trade_forward): "close" reproduces the
+    # historical checkpoints; "next_open" + gap_fills=True is the honest mode
+    # for the next full re-walk.
+    entry_fill: str = "close"
+    gap_fills: bool = False
 
 
 def _profile_for_simulations(simulations: int) -> TrainingProfile:
@@ -172,16 +177,36 @@ def simulate_trade_forward(
     max_risk: float = 10.0,
     slippage_pct: float = 0.0,
     atr14: pd.Series | None = None,
+    entry_fill: str = "close",
+    gap_fills: bool = False,
 ) -> SimResult | None:
-    """Simulate one trade forward using real subsequent bars."""
+    """Simulate one trade forward using real subsequent bars.
+
+    entry_fill:
+      "close"      — fill at the signal bar's close (legacy; optimistic, the
+                     decision and the fill share a price).
+      "next_open"  — fill at the NEXT bar's open, which is what the live path
+                     actually does (market order submitted after the signal).
+    gap_fills: when True, a stop/trail breached by an opening gap fills at the
+      OPEN, not at the stop price — puts the -3R gap nights into the label
+      instead of pretending they were -1R.
+    """
     if not setup.get("is_valid_setup"):
         return None
+    if entry_fill not in ("close", "next_open"):
+        raise ValueError(f"entry_fill must be 'close' or 'next_open', got {entry_fill!r}")
 
     bearish = setup.get("bias") == "bearish"
     # adverse slippage: longs fill higher, shorts fill LOWER (the old +slip on
     # shorts improved their entries)
     slip = slippage_pct / 100
-    entry = setup["current_price"] * ((1 - slip) if bearish else (1 + slip))
+    if entry_fill == "next_open":
+        if entry_idx + 1 >= len(df):
+            return None
+        base_px = float(df.iloc[entry_idx + 1]["Open"])
+    else:
+        base_px = setup["current_price"]
+    entry = base_px * ((1 - slip) if bearish else (1 + slip))
     stop = round(setup.get("stop_loss") or setup["resistance_level"] * 0.98, 2)
     risk_per_share = (stop - entry) if bearish else (entry - stop)
     if risk_per_share <= 0:
@@ -208,18 +233,27 @@ def simulate_trade_forward(
         close = float(bar["Close"])
         low = float(bar["Low"])
         high = float(bar["High"])
+        open_ = float(bar["Open"])
 
         def _pnl(exit_px: float, remaining: float) -> float:
             if bearish:
                 return (entry - exit_px) * remaining + total_pnl
             return (exit_px - entry) * remaining + total_pnl
 
+        def _stop_fill(level: float) -> float:
+            """Where a resting stop actually fills: at the level, unless the
+            bar OPENED through it (gap) — then the open is the best you get."""
+            if not gap_fills:
+                return level
+            return max(level, open_) if bearish else min(level, open_)
+
         stopped = (high >= stop) if bearish else (low <= stop)
         if stopped:
-            pnl = _pnl(stop, shares_remaining)
+            fill = _stop_fill(stop)
+            pnl = _pnl(fill, shares_remaining)
             return SimResult(
                 ticker="", entry_date=entry_date, entry_price=round(entry, 2),
-                exit_price=stop, stop_loss=stop, pnl_r=round(pnl / max_risk, 2),
+                exit_price=round(fill, 2), stop_loss=stop, pnl_r=round(pnl / max_risk, 2),
                 pnl_dollars=round(pnl, 2), exit_reason="HARD_STOP",
                 days_held=day_offset, setup_score=setup["confidence_score"],
                 setup_type=setup["setup_type"], won=pnl > 0, slippage_pct=slippage_pct,
@@ -264,10 +298,11 @@ def simulate_trade_forward(
                     extreme = max(extreme, close)
                     trailing_stop = max(trailing_stop, extreme - atr * 2.0)
             if trail_hit:
-                pnl = _pnl(trailing_stop, shares_remaining)
+                fill = _stop_fill(trailing_stop)
+                pnl = _pnl(fill, shares_remaining)
                 return SimResult(
                     ticker="", entry_date=entry_date, entry_price=round(entry, 2),
-                    exit_price=round(trailing_stop, 2), stop_loss=stop,
+                    exit_price=round(fill, 2), stop_loss=stop,
                     pnl_r=round(pnl / max_risk, 2), pnl_dollars=round(pnl, 2),
                     exit_reason="TRAILING_STOP", days_held=day_offset,
                     setup_score=setup["confidence_score"],
@@ -303,7 +338,10 @@ def simulate_trade_forward(
 
 
 def _process_ticker(args: tuple) -> tuple[str, list[dict], int]:
-    ticker, df_dict, slippage_levels, walk_step, max_setups = args
+    # trailing args are optional so pre-realism task tuples keep working
+    ticker, df_dict, slippage_levels, walk_step, max_setups, *rest = args
+    entry_fill = rest[0] if len(rest) > 0 else "close"
+    gap_fills = rest[1] if len(rest) > 1 else False
     warnings.filterwarnings("ignore", category=RuntimeWarning)
 
     df = pd.DataFrame(df_dict)
@@ -323,7 +361,8 @@ def _process_ticker(args: tuple) -> tuple[str, list[dict], int]:
     results = []
     for idx, setup in setups:
         for slip in slippage_levels:
-            sim = simulate_trade_forward(df, idx, setup, slippage_pct=slip, atr14=atr14)
+            sim = simulate_trade_forward(df, idx, setup, slippage_pct=slip, atr14=atr14,
+                                         entry_fill=entry_fill, gap_fills=gap_fills)
             if sim:
                 sim.ticker = ticker
                 results.append(sim.to_dict())
