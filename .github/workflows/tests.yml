@@ -1,0 +1,27 @@
+name: tests
+
+# Fast unit tests only — the expensive walks/training stay manual.
+# No LFS checkout (pointers are fine; tests use synthetic fixtures), so this
+# burns ~2 runner-minutes per push, not hours.
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt -r requirements-ml.txt pytest
+      - run: python -m pytest tests/ -q
