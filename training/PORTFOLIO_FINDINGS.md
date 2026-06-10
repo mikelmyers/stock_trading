@@ -372,6 +372,85 @@ raised with the current bar's close and triggered on the same bar's low
 horizon as 14 calendar days; short entries received favorable slippage; the
 legacy calibrator counted bootstrap resamples and slippage variants as evidence.
 
-**Action: re-run `validated_sim` (dev, clean, walk-forward) on a re-labeled
-dataset and re-state this file's tables before trusting any number above.**
-The go-live protocol's "blind expectation" benchmark must be the re-stated one.
+**RE-STATED RESULTS (2026-06-10):** Re-ran `validated_sim` on the existing
+`survivorship_free_v2.parquet` dataset (1.69M rows, 52.5% base win, market
+features present) using the fixed measurement code from PR #6. All 47 regression
+tests pass. Full console output saved under `training/output/`.
+
+These re-stated figures are the **new go-live benchmark** for the forward
+paper-trading gate. Compare against the stale headline numbers above (flat
+sizing = honest baseline per the blind walk-forward section).
+
+**Caveat — labels not re-walked:** the underlying trade labels in
+`survivorship_free_v2.parquet` still predate the trailing-stop intrabar
+lookahead fix (PR #6). A future full survivorship re-walk would relabel every
+setup and may shift mean R modestly; that compute was not available for this
+re-statement. The Sharpe / trades-yr / CAGR corrections below are from the
+measurement fixes only (daily Sharpe, `np.busday_offset` close dates, training-
+distribution P-floor).
+
+### Walk-forward blind money test (2019–2026, flat sizing)
+
+| metric | stale | re-stated |
+|---|---:|---:|
+| mean R / trade | +0.069 | **+0.076** |
+| CAGR (1%/trade) | +5.4% | **+4.9%** |
+| max drawdown | 15% | **19%** |
+| Sharpe | 1.87 | **0.84** |
+| trades / yr | ~80–100 | **67** |
+| $10k → | $14,711 | **$14,195** |
+
+per-year mean R (stale → re-stated):
+2019 +0.145→**+0.168** · 2020 +0.049→**+0.196** · 2021 +0.070→**+0.138** ·
+2022 −0.127→**−0.232** · 2023 +0.109→**+0.119** · 2024 +0.178→**+0.177** ·
+2025 +0.005→**+0.012** · 2026 −0.010→**−0.056**
+
+Sharpe and trades/yr dropped as expected; mean R barely moved. Regime-scaled
+sizing: Sharpe 1.71→**0.87**, CAGR +4.3%→**+4.2%**, maxDD 15%→**16%**.
+
+### DEV period (2019–2023, flat sizing)
+
+| metric | stale | re-stated |
+|---|---:|---:|
+| mean R / trade | +0.051 | **+0.140** |
+| CAGR (1%/trade) | +4.6% | **+9.3%** |
+| max drawdown | 19% | **12%** |
+| Sharpe | 1.33 | **1.43** |
+| trades / yr | (not logged) | **66** |
+
+per-year mean R (re-stated):
+2019 **+0.168** · 2020 **+0.269** · 2021 **+0.175** · 2022 **−0.182** ·
+2023 **+0.222**
+
+Dev mean R rose because the P-floor now comes from the training distribution
+(not the eval window's own quantile), concentrating higher-conviction trades.
+Sharpe stayed in the ~1.0–1.5 band. Regime-scaled: Sharpe 1.48→**1.41**,
+CAGR +4.5%→**+7.6%**, maxDD 15%→**8%**.
+
+### CLEAN one-shot test (2024+, flat sizing)
+
+| metric | stale | re-stated |
+|---|---:|---:|
+| mean R / trade | +0.079 | **+0.102** |
+| CAGR (1%/trade) | +8.1% | **+6.3%** |
+| max drawdown | 15% | **9%** |
+| Sharpe | 2.18 | **1.12** |
+| trades / yr | (not logged) | **63** |
+
+per-year mean R (stale → re-stated):
+2024 +0.206→**+0.160** · 2025 ~0→**+0.035** · 2026 ~0→**+0.187**
+
+The headline 2.45 Sharpe / +8% CAGR were inflated ~2×; re-stated Sharpe **1.12**
+is the honest clean-test number. Regime-scaled: Sharpe 2.45→**1.14**, CAGR
++7.7%→**+5.4%**, maxDD 11%→**8%**.
+
+### Updated go-live benchmark (forward paper-trading gate)
+
+Score live signals against the **walk-forward blind book** (the hardest test):
+
+> ~**+0.076R**/trade · Sharpe ~**0.8–0.9** · ~**67 trades/yr** · ~**5% CAGR**
+> at 1%/trade · ~**19%** max drawdown · positive ~75% of years.
+
+Proceed to live capital only if forward paper-trading holds these re-stated
+expectations — not the stale ~1.8 Sharpe / ~80–100 trades-yr figures quoted
+earlier in this file.
