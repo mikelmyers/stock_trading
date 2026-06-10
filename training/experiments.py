@@ -49,7 +49,8 @@ def _dataset_hash(path: str | Path | None) -> str | None:
 def log_experiment(name: str, config: dict | str, verdict: str,
                    dataset: str | None = None, metric: str = "",
                    baseline: str = "", notes: str = "",
-                   ledger: Path = LEDGER) -> dict:
+                   ledger: Path | None = None) -> dict:
+    ledger = Path(ledger) if ledger else LEDGER   # resolve at call time
     if verdict not in VERDICTS:
         raise ValueError(f"verdict must be one of {VERDICTS}, got {verdict!r}")
     cfg = config if isinstance(config, dict) else json.loads(config or "{}")
@@ -73,20 +74,21 @@ def log_experiment(name: str, config: dict | str, verdict: str,
     return rec
 
 
-def load(ledger: Path = LEDGER) -> list[dict]:
-    if not Path(ledger).exists():
+def load(ledger: Path | None = None) -> list[dict]:
+    ledger = Path(ledger) if ledger else LEDGER
+    if not ledger.exists():
         return []
     return [json.loads(line) for line in
-            Path(ledger).read_text(encoding="utf-8").splitlines() if line.strip()]
+            ledger.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def trial_count(ledger: Path = LEDGER) -> int:
+def trial_count(ledger: Path | None = None) -> int:
     """How many draws have been taken against the data — the number that the
     significance of any single 'winning' experiment must be discounted by."""
     return len(load(ledger))
 
 
-def render(ledger: Path = LEDGER, out: Path | None = None) -> str:
+def render(ledger: Path | None = None, out: Path | None = None) -> str:
     out = Path(out) if out else RENDERED   # resolve at call time
     rows = load(ledger)
     lines = [
