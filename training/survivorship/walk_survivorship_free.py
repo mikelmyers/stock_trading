@@ -39,6 +39,22 @@ PROFILE = TrainingProfile(
     slippage_levels=[0.0],
 )
 
+# Honest-label profile for the NEXT full re-walk: fill at the next bar's open
+# (what the live path actually does) and let opening gaps fill stops at the
+# open. Writes to its own checkpoint dir so the historical sims_full labels
+# stay reproducible side by side.
+REALISM_PROFILE = TrainingProfile(
+    name="surv_free_realism",
+    walk_step=1,
+    max_setups_per_ticker=None,
+    early_stop_real_setups=None,
+    chunk_size=CHECKPOINT_CHUNK_SIZE,
+    slippage_levels=[0.0],
+    entry_fill="next_open",
+    gap_fills=True,
+)
+REALISM_CKPT_DIR = "training/cache/sims_realism"
+
 
 def _in_shard(ticker: str, shard: int, num_shards: int) -> bool:
     """Deterministic, stable assignment of a ticker to one of ``num_shards``
@@ -50,9 +66,14 @@ def _in_shard(ticker: str, shard: int, num_shards: int) -> bool:
 
 
 def run(workers: int = 4, shard: int = 0, num_shards: int = 1,
-        limit: int | None = None) -> None:
+        limit: int | None = None, realism: bool = False) -> None:
+    profile = REALISM_PROFILE if realism else PROFILE
+    if realism:
+        from training.resumable_train import set_ckpt_dir
+        set_ckpt_dir(REALISM_CKPT_DIR)
     print("=" * 64)
-    print("  SURVIVORSHIP-FREE CHECKPOINT WALK (slippage=[0.0], walk_step=1)")
+    print(f"  SURVIVORSHIP-FREE CHECKPOINT WALK [{profile.name}] "
+          f"(entry_fill={profile.entry_fill}, gap_fills={profile.gap_fills})")
     print("=" * 64)
     tickers = load_training_universe()
     print(f"Universe: {len(tickers)} tickers (incl. delisted ex-S&P names)")
@@ -68,7 +89,7 @@ def run(workers: int = 4, shard: int = 0, num_shards: int = 1,
         history = dict(list(history.items())[:limit])
         print(f"  --limit {limit}: capped to {len(history)} tickers (smoke test).")
 
-    _walk_with_checkpoints(history, PROFILE, workers, PROFILE.chunk_size)
+    _walk_with_checkpoints(history, profile, workers, profile.chunk_size)
 
     base_results = _gather_all(history)
     print("=" * 64)
@@ -87,12 +108,16 @@ def main(argv: list[str] | None = None) -> int:
                         "checkpoints that merge cleanly via git.")
     p.add_argument("--limit", type=int, default=None,
                    help="Cap to the first N tickers of this shard (smoke test).")
+    p.add_argument("--realism", action="store_true",
+                   help="Honest labels: next-open entry fills + gap-through-stop "
+                        f"fills, checkpointed to {REALISM_CKPT_DIR}/")
     args = p.parse_args(argv)
     shard_str, _, num_str = args.shard.partition("/")
     shard, num_shards = int(shard_str), int(num_str or "1")
     if not (0 <= shard < num_shards):
         p.error(f"--shard k/N requires 0 <= k < N (got {args.shard})")
-    run(workers=args.workers, shard=shard, num_shards=num_shards, limit=args.limit)
+    run(workers=args.workers, shard=shard, num_shards=num_shards, limit=args.limit,
+        realism=args.realism)
     return 0
 
 

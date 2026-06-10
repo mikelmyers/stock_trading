@@ -195,7 +195,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", default=None, help="Output path (.parquet)")
     p.add_argument("--from-checkpoints", action="store_true",
                    help="Reuse training/cache/sims_full checkpoints (fast, no re-walk)")
+    p.add_argument("--ckpt-dir", default=None,
+                   help="Alternate checkpoint dir (e.g. training/cache/sims_realism)")
     args = p.parse_args(argv)
+    if args.ckpt_dir:
+        from training.resumable_train import set_ckpt_dir
+        set_ckpt_dir(args.ckpt_dir)
     if args.from_checkpoints:
         build_from_checkpoints(out=args.out, slippage_label=args.slippage)
     else:

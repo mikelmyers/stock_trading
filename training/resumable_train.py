@@ -44,6 +44,14 @@ from training.universe import load_training_universe
 CKPT_DIR = Path(__file__).resolve().parent / "cache" / "sims_full"
 
 
+def set_ckpt_dir(path: str | Path) -> Path:
+    """Redirect checkpoints (e.g. the realism re-walk writes to sims_realism/
+    so the historical sims_full labels stay reproducible)."""
+    global CKPT_DIR
+    CKPT_DIR = Path(path)
+    return CKPT_DIR
+
+
 def _ckpt_path(ticker: str) -> Path:
     safe = ticker.replace("/", "_").replace(".", "_")
     return CKPT_DIR / f"{safe}.pkl"
@@ -89,6 +97,7 @@ def _walk_with_checkpoints(history, profile, workers, chunk_size):
             tasks.append((
                 ticker, df_reset.to_dict(), profile.slippage_levels,
                 profile.walk_step, profile.max_setups_per_ticker,
+                profile.entry_fill, profile.gap_fills,
             ))
         with ProcessPoolExecutor(max_workers=workers) as pool:
             futures = {pool.submit(_process_ticker, t): t[0] for t in tasks}
