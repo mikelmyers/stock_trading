@@ -56,26 +56,46 @@ def save_learned_params(params: dict) -> Path:
     return LEARNED_PARAMS_FILE
 
 
-def _setup_stats(results: list[dict], setup_type: str) -> dict:
-    real = [r for r in results if r.get("setup_type") == setup_type and r.get("bootstrap_id", 0) == 0]
-    all_type = [r for r in results if r.get("setup_type") == setup_type]
-    if not all_type:
+# A setup needs at least this many REAL trades before win/expectancy stats
+# mean anything; 5 was noise-mining.
+MIN_REAL_TRADES_TO_ENABLE = 30
+
+
+def _real_only(results: list[dict]) -> list[dict]:
+    """Calibration evidence: real (non-bootstrap) trades at the base slippage
+    level. Bootstrap resamples add zero information, and counting each setup
+    once per slippage level triple-counted everything."""
+    real = [r for r in results if r.get("bootstrap_id", 0) == 0]
+    if not real:
+        return []
+    base_slip = min(r.get("slippage_pct", 0.0) for r in real)
+    return [r for r in real if r.get("slippage_pct", 0.0) == base_slip]
+
+
+def _expectancy(rows: list[dict]) -> tuple[float, float]:
+    """(win_rate, expectancy in R) with explicit empty-side guards — the old
+    ``np.mean([...]) or 1`` never engaged because NaN is truthy."""
+    if not rows:
+        return 0.0, 0.0
+    win_r = [r["pnl_r"] for r in rows if r["won"]]
+    loss_r = [abs(r["pnl_r"]) for r in rows if not r["won"]]
+    wr = len(win_r) / len(rows)
+    aw = float(np.mean(win_r)) if win_r else 0.0
+    al = float(np.mean(loss_r)) if loss_r else 0.0
+    return wr, (wr * aw) - ((1 - wr) * al)
+
+
+def _setup_stats(real_results: list[dict], setup_type: str) -> dict:
+    real = [r for r in real_results if r.get("setup_type") == setup_type]
+    if not real:
         return {"real_count": 0, "count": 0, "win_rate": 0, "expectancy": 0, "enabled": False}
-
-    wins = [r for r in all_type if r["won"]]
-    wr = len(wins) / len(all_type)
-    aw = np.mean([r["pnl_r"] for r in wins]) if wins else 0
-    al = np.mean([abs(r["pnl_r"]) for r in all_type if not r["won"]]) or 1
-    exp = (wr * aw) - ((1 - wr) * al)
-    if not np.isfinite(exp):
-        exp = float(aw) if wr >= 1.0 else 0.0
-
+    wr, exp = _expectancy(real)
     return {
         "real_count": len(real),
-        "count": len(all_type),
+        "count": len(real),
         "win_rate": round(wr * 100, 1),
         "expectancy": round(float(exp), 3),
-        "enabled": len(real) >= 5 and exp > 0,
+        "enabled": len(real) >= MIN_REAL_TRADES_TO_ENABLE and exp > 0,
     }
 
 
@@ -89,15 +109,18 @@ def calibrate(results: list[dict]) -> dict:
     if not results:
         return params
 
-    wins = [r for r in results if r["won"]]
-    win_rate = len(wins) / len(results)
-    avg_win = np.mean([r["pnl_r"] for r in wins]) if wins else 0
-    avg_loss = np.mean([abs(r["pnl_r"]) for r in results if not r["won"]]) or 1
-    expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
+    # All calibration statistics run on real, base-slippage trades only.
+    # Bootstrap copies and slippage variants stay useful for stress reporting
+    # (summarize_results) but are not evidence.
+    real = _real_only(results)
+    if not real:
+        return params
 
-    setup_types = sorted({r.get("setup_type", "unknown") for r in results})
+    win_rate, expectancy = _expectancy(real)
+
+    setup_types = sorted({r.get("setup_type", "unknown") for r in real})
     setup_performance = {
-        st: _setup_stats(results, st) for st in setup_types
+        st: _setup_stats(real, st) for st in setup_types
     }
 
     enabled = [st for st, perf in setup_performance.items() if perf["enabled"]]
@@ -108,29 +131,24 @@ def calibrate(results: list[dict]) -> dict:
 
     best_score = 70
     best_exp = -999.0
-    enabled_results = [r for r in results if r.get("setup_type") in enabled] if enabled else results
+    enabled_results = [r for r in real if r.get("setup_type") in enabled] if enabled else real
 
     for cutoff in range(50, 101, 10):
         subset = [r for r in enabled_results if r["setup_score"] >= cutoff]
         if len(subset) < 20:
             continue
-        sub_wins = [r for r in subset if r["won"]]
-        sub_wr = len(sub_wins) / len(subset)
-        sub_aw = np.mean([r["pnl_r"] for r in sub_wins]) if sub_wins else 0
-        sub_al = np.mean([abs(r["pnl_r"]) for r in subset if not r["won"]]) or 1
-        sub_exp = (sub_wr * sub_aw) - ((1 - sub_wr) * sub_al)
+        _, sub_exp = _expectancy(subset)
         if sub_exp > best_exp:
             best_exp = sub_exp
             best_score = cutoff
 
     by_ticker: dict[str, list] = {}
-    for r in results:
-        if r.get("bootstrap_id", 0) == 0:
-            by_ticker.setdefault(r["ticker"], []).append(r["pnl_r"])
+    for r in real:
+        by_ticker.setdefault(r["ticker"], []).append(r["pnl_r"])
 
     strong_tickers = [
         t for t, pnls in by_ticker.items()
-        if len(pnls) >= 3 and np.mean(pnls) > 0.2
+        if len(pnls) >= 20 and np.mean(pnls) > 0.2
     ]
 
     params.update({
@@ -138,17 +156,20 @@ def calibrate(results: list[dict]) -> dict:
         "min_composite_score": max(50, best_score - 15),
         "expectancy_threshold": round(max(0, best_exp), 3),
         "trained_on_simulations": len(results),
+        "trained_real_trades": len(real),
         "trained_win_rate": round(win_rate * 100, 1),
         "trained_expectancy": round(float(expectancy), 3),
         "strong_tickers": strong_tickers[:20],
-        "score_expectancy_map": _score_map(results),
+        "score_expectancy_map": _score_map(real),
         "setup_performance": setup_performance,
         "enabled_setups": enabled or list(setup_performance.keys()),
     })
 
-    if win_rate >= 0.55 and len(results) >= 500:
+    # Confidence tiers gate on REAL trade counts (synthetic resamples used to
+    # be able to satisfy these thresholds regardless of evidence).
+    if win_rate >= 0.55 and len(real) >= 500:
         params["min_probability_confidence"] = "MEDIUM"
-    if win_rate >= 0.60 and len(results) >= 2000:
+    if win_rate >= 0.60 and len(real) >= 2000:
         params["min_probability_confidence"] = "HIGH"
 
     return params

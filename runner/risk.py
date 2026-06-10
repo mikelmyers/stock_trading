@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -46,7 +47,9 @@ class RiskConfig:
     max_leverage: float = 1.0            # notional <= equity x this (1.0 = cash, no margin)
     require_green_light: bool = True
     flat_by_close: bool = True
-    # classifier gate (active only once a model is trained; dormant otherwise)
+    # classifier gate (active only once a model is trained; dormant otherwise).
+    # These are FALLBACK thresholds — the trained bundle carries calibrated,
+    # base-rate-aware thresholds from its holdout, which take precedence.
     use_classifier: bool = True
     min_p_monster: float = 0.50
     max_p_loss: float = 0.50
@@ -84,6 +87,7 @@ class RunnerState:
     trades_today: int = 0
     open_positions: int = 0
     locked_until: Optional[str] = None       # iso ts; trading blocked until then
+    synced_date: str = ""                    # last date broker equity anchored the day
 
     @classmethod
     def load(cls, episode_id: str, equity: float) -> "RunnerState":
@@ -101,7 +105,26 @@ class RunnerState:
 
     def save(self):
         STATE_DIR.mkdir(parents=True, exist_ok=True)
-        (STATE_DIR / f"state_{self.episode_id}.json").write_text(json.dumps(asdict(self), indent=2))
+        path = STATE_DIR / f"state_{self.episode_id}.json"
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(asdict(self), indent=2))
+        os.replace(tmp, path)  # atomic: a crash mid-write can't corrupt state
+
+    def sync_with_broker(self, broker_equity: float, open_position_count: int):
+        """Replace gate inputs with broker truth each cycle.
+
+        The local counters drift (entries that never filled, stops that filled
+        at the broker, manual trades), and equity as a CLI constant means the
+        daily-loss limit can never fire. daily_pnl derived from broker equity
+        includes unrealized P&L — the conservative measure for a circuit breaker.
+        """
+        self.equity = broker_equity
+        self.open_positions = open_position_count
+        if self.synced_date != self.date:    # first sync of the day anchors it
+            self.day_start_equity = broker_equity
+            self.synced_date = self.date
+        self.daily_pnl = broker_equity - self.day_start_equity
+        self.save()
 
     def register_outcome(self, pnl_dollars: float, r_multiple: float, cfg: RiskConfig, now=None):
         """Update streak/pnl/locks after a trade closes."""
@@ -169,8 +192,12 @@ class RiskEngine:
         if cv.blowup_flags:
             d.reason = f"blow-up flag veto [{cv.blowup_flags}]"; return d
         sc = self._score(cv)                    # None until the classifier is trained
-        if sc is not None and (sc["p_monster"] < c.min_p_monster or sc["p_loss"] > c.max_p_loss):
-            d.reason = f"classifier veto (pm {sc['p_monster']:.2f} / pl {sc['p_loss']:.2f})"; return d
+        if sc is not None:
+            thr_m = sc.get("thr_monster") or c.min_p_monster
+            thr_l = sc.get("thr_loss") or c.max_p_loss
+            if sc["p_monster"] < thr_m or sc["p_loss"] > thr_l:
+                d.reason = (f"classifier veto (pm {sc['p_monster']:.2f}<{thr_m:.2f} "
+                            f"/ pl {sc['p_loss']:.2f}>{thr_l:.2f})"); return d
 
         stop = self._stop(cv)
         if not stop or stop >= cv.price:

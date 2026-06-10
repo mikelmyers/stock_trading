@@ -77,10 +77,13 @@ def _replay(entry: float, stop: float, bars: pd.DataFrame, atr: pd.Series):
         if armed or close >= t1:
             armed = True
             a = float(atr.loc[bars.index[d]]) if bars.index[d] in atr.index else risk
-            extreme = max(extreme, close)
-            trailing = max(trailing, extreme - a * TRAIL_ATR_MULT)
+            # Test today's low against the level armed BEFORE this bar; a stop
+            # raised with today's close can't have been live during today's
+            # session (mirrors the backtester fix — labels must match).
             if low <= trailing and trailing > stop:
                 return (True, "TRAILING_STOP", 0.0)
+            extreme = max(extreme, close)
+            trailing = max(trailing, extreme - a * TRAIL_ATR_MULT)
         if day >= 10:
             total_r = realized_r + (close - entry) / risk * frac
             if total_r < 0.25:

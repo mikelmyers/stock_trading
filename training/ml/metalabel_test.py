@@ -20,6 +20,7 @@ import pandas as pd
 from training.ml.features import FEATURE_COLUMNS
 from training.ml.model import _make_classifier
 from training.ml.splits import purged_walkforward_splits
+from training.simutil import trading_close_dates
 
 DATASET = "training/ml/datasets/full.parquet"
 
@@ -60,7 +61,7 @@ def main():
 
     # 2) Capacity-limited book selected by P(win) instead of hand score
     import collections, heapq
-    oos["close"] = pd.to_datetime(oos["date"]) + pd.to_timedelta(oos["days_held"], "D")
+    oos["close"] = trading_close_dates(oos["date"], oos["days_held"])
     oos["date"] = pd.to_datetime(oos["date"])
     K, PER = 5, 2
     openh: list = []

@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from agents.indicators import calculate_atr
+from agents.indicators import calculate_atr, calculate_rolling_vwap
 from agents.setups.base import empty_setup
 
 
@@ -11,10 +11,10 @@ def analyze_vwap_reclaim(df: pd.DataFrame) -> dict:
         return empty_setup("vwap_reclaim", "VWAP Reclaim")
 
     df = df.copy()
-    # Backtests pre-attach a full-history anchored VWAP (cumulative, exact at
-    # each bar); live scans pass a raw window, so compute it on the fly.
+    # Backtests pre-attach the same trailing 20-bar VWAP (training/backtester
+    # _precompute_indicators); live scans pass a raw window, so compute it here.
     if "VWAP" not in df.columns:
-        df["VWAP"] = (df["Close"] * df["Volume"]).cumsum() / df["Volume"].cumsum()
+        df["VWAP"] = calculate_rolling_vwap(df, 20)
     df["SMA_20"] = df["Close"].rolling(20).mean()
 
     close = df["Close"].iloc[-1]

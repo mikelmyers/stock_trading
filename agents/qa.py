@@ -35,10 +35,11 @@ def analyze_qa(ticker: str, df: pd.DataFrame, sheet: dict) -> dict:
 
     learned = load_learned_params()
     trained = learned.get("trained_on_simulations", 0)
-    real_est = trained * 0.46 if trained else 0
-    if trained > 0 and real_est < trained * 0.3:
+    real = learned.get("trained_real_trades")
+    # (the old hardcoded 0.46-estimate check was mathematically unreachable)
+    if trained > 0 and real is not None and real < trained * 0.3:
         warnings.append(
-            f"Training is {trained:,} sims but ~{int(real_est):,} are real — "
+            f"Training is {trained:,} sims but only {real:,} are real trades — "
             "bootstrap-heavy, watch overfitting"
         )
 

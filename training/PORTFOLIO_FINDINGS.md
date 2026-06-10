@@ -350,3 +350,28 @@ fundamental axis (classic value/quality/growth) adds no tradeable edge; the
 stronger factors (estimate revisions, earnings surprise) need paid, crowded data.
 **Our edge is the regime TIMING; the validated event-driven system is the
 deliverable.** Forward paper-trading remains the only un-run gate.
+
+## UPDATE — measurement audit: HEADLINE NUMBERS ABOVE ARE STALE, re-run required
+
+A code audit found two measurement bugs that inflate every realized-book number
+quoted above (now fixed in `training/simutil.py` + the four book sims, with
+regression tests under `tests/`):
+
+1. **Sharpe was annualized with sqrt(252) over per-trade-event returns**
+   (~80-100 events/yr, not 252), inflating it ~sqrt(252/trades_per_yr) ≈
+   1.6-1.9x. The "Sharpe 1.87 blind / 2.45 clean / benchmark ~1.8" figures are
+   wrong; true through-cycle Sharpe is plausibly **~1.0-1.2**. Now computed on
+   a business-daily-resampled equity curve.
+2. **Close dates added `days_held` (TRADING days) as CALENDAR days**, freeing
+   K-slot capacity ~30% early — trades/yr and compounded CAGR are overstated
+   in every capacity-limited book above.
+
+Also fixed with label impact (smaller): the backtester's trailing stop was
+raised with the current bar's close and triggered on the same bar's low
+(intrabar lookahead, now prior-bar level); purge gaps treated the 14-trading-day
+horizon as 14 calendar days; short entries received favorable slippage; the
+legacy calibrator counted bootstrap resamples and slippage variants as evidence.
+
+**Action: re-run `validated_sim` (dev, clean, walk-forward) on a re-labeled
+dataset and re-state this file's tables before trusting any number above.**
+The go-live protocol's "blind expectation" benchmark must be the re-stated one.

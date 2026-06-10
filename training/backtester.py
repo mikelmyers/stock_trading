@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from agents.indicators import calculate_atr
+from agents.indicators import calculate_atr, calculate_rolling_vwap
 from agents.setups.registry import SETUP_REGISTRY
 from config import (
     BASE_DIR,
@@ -140,7 +140,7 @@ def _precompute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["EMA_21"] = out["Close"].ewm(span=21, adjust=False).mean()
     out["SMA_200"] = out["Close"].rolling(200).mean()
-    out["VWAP"] = (out["Close"] * out["Volume"]).cumsum() / out["Volume"].cumsum()
+    out["VWAP"] = calculate_rolling_vwap(out, 20)
     return out
 
 
@@ -178,7 +178,10 @@ def simulate_trade_forward(
         return None
 
     bearish = setup.get("bias") == "bearish"
-    entry = setup["current_price"] * (1 + slippage_pct / 100)
+    # adverse slippage: longs fill higher, shorts fill LOWER (the old +slip on
+    # shorts improved their entries)
+    slip = slippage_pct / 100
+    entry = setup["current_price"] * ((1 - slip) if bearish else (1 + slip))
     stop = round(setup.get("stop_loss") or setup["resistance_level"] * 0.98, 2)
     risk_per_share = (stop - entry) if bearish else (entry - stop)
     if risk_per_share <= 0:
@@ -245,14 +248,21 @@ def simulate_trade_forward(
                 atr = float(atr14.iloc[bar_idx])
             else:
                 atr = float(calculate_atr(df.iloc[: bar_idx + 1], 14).iloc[-1])
+            # The level a live stop order rests at TODAY was set from data
+            # through yesterday's close — test the bar against the prior level
+            # first, then ratchet with today's close/ATR for tomorrow.
+            # (Raising the trail with today's close and triggering it on the
+            # same bar's low was intrabar lookahead.)
             if bearish:
-                extreme = min(extreme, close)
-                trailing_stop = min(trailing_stop, extreme + atr * 2.0)
                 trail_hit = high >= trailing_stop and trailing_stop < stop
+                if not trail_hit:
+                    extreme = min(extreme, close)
+                    trailing_stop = min(trailing_stop, extreme + atr * 2.0)
             else:
-                extreme = max(extreme, close)
-                trailing_stop = max(trailing_stop, extreme - atr * 2.0)
                 trail_hit = low <= trailing_stop and trailing_stop > stop
+                if not trail_hit:
+                    extreme = max(extreme, close)
+                    trailing_stop = max(trailing_stop, extreme - atr * 2.0)
             if trail_hit:
                 pnl = _pnl(trailing_stop, shares_remaining)
                 return SimResult(
