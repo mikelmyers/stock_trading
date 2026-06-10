@@ -1,22 +1,30 @@
 """Reconcile live Alpaca paper fills against the logged signals.
 
 Answers: of the signals we logged, which got filled, what's open, what closed,
-and what REAL R did they make -- vs the blind expectation (~+0.07R/trade).
+what REAL R did they make vs the blind expectation (+0.076R re-stated), and —
+critically — whether broker state has drifted from the logs (unmatched fills,
+positions with no signal row). This is a FEEDBACK LOOP, not a report: run with
+--strict in the daily flow and a non-zero exit blocks anything downstream.
 
 Matching is EXACT by Alpaca order id via executions.csv (written by alpaca_exec
 on submit). For any fill without an executions row (e.g. trades submitted before
 order-id logging existed), it falls back to matching by ticker against
 paper_trades.csv. Credentials from env; run where Alpaca is reachable.
 
-    python -m training.reconcile
+    python -m training.reconcile             # report
+    python -m training.reconcile --strict    # exit 1 on any drift
 """
 from __future__ import annotations
+
+import argparse
 
 import pandas as pd
 
 from training.alpaca_exec import EXEC_LOG, LOG, _get
+from training.fill_quality import fetch_all_orders
 
-EXPECTED_R = 0.07  # blind walk-forward expectation
+EXPECTED_R = 0.076   # re-stated blind walk-forward expectation (PR #7)
+MIN_MEANINGFUL_TRADES = 30
 
 
 def _stop_lookups():
@@ -36,20 +44,27 @@ def _stop_lookups():
     return by_id, by_ticker
 
 
-def reconcile():
+def gather(get_fn=None) -> dict:
+    """Pull broker truth and join it to the signal logs. Returns
+    {open, closed, unmatched_fills, orphan_positions} — orphans are broker
+    positions with NO signal/exec row at all (manual trades or lost logs)."""
+    get_fn = get_fn or _get
     by_id, by_ticker = _stop_lookups()
-    orders = _get("/v2/orders", status="all", nested="true", limit=500)
-    last_px = {p["symbol"]: float(p["current_price"]) for p in _get("/v2/positions")}
+    orders = fetch_all_orders(get_fn)
+    positions = get_fn("/v2/positions")
+    last_px = {p["symbol"]: float(p["current_price"]) for p in positions}
 
-    open_t, closed_t, unmatched = [], [], 0
+    open_t, closed_t, unmatched = [], [], []
+    matched_symbols = set()
     for o in orders:
         if o.get("side") != "buy" or not o.get("filled_avg_price"):
             continue                                   # not a filled entry
         tk, entry = o["symbol"], float(o["filled_avg_price"])
         meta = by_id.get(str(o["id"])) or by_ticker.get(tk)
         if meta is None:
-            unmatched += 1
+            unmatched.append(tk)
             continue
+        matched_symbols.add(tk)
         stop, mp = meta
         denom = entry - stop
         leg = next((l for l in (o.get("legs") or []) if l.get("side") == "sell"), None)
@@ -62,12 +77,31 @@ def reconcile():
             uR = (last - entry) / denom if (last and denom) else float("nan")
             open_t.append((tk, entry, last, uR, mp))
 
+    known = set(by_ticker) | matched_symbols
+    orphans = sorted({p["symbol"] for p in positions} - known)
+    return {"open": open_t, "closed": closed_t,
+            "unmatched_fills": unmatched, "orphan_positions": orphans}
+
+
+def reconcile(get_fn=None, strict: bool = False) -> int:
+    g = gather(get_fn)
+    open_t, closed_t = g["open"], g["closed"]
+    unmatched, orphans = g["unmatched_fills"], g["orphan_positions"]
+
     print("=" * 66)
     print("  PAPER-TRADE RECONCILIATION  (logged signals vs real Alpaca fills)")
     print("=" * 66)
     src = "exact order-id match" if EXEC_LOG.exists() else "ticker fallback (no executions.csv yet)"
-    print(f"  matching: {src}  |  open: {len(open_t)}  closed: {len(closed_t)}"
-          + (f"  |  {unmatched} fills unmatched (manual orders?)" if unmatched else ""))
+    print(f"  matching: {src}  |  open: {len(open_t)}  closed: {len(closed_t)}")
+    drift = False
+    if unmatched:
+        drift = True
+        print(f"  [DRIFT] {len(unmatched)} filled buys with NO signal/exec row: "
+              f"{', '.join(sorted(set(unmatched))[:8])}")
+    if orphans:
+        drift = True
+        print(f"  [DRIFT] broker positions with NO log entry (unmanaged!): "
+              f"{', '.join(orphans[:8])}")
 
     if open_t:
         print("\n  OPEN POSITIONS (unrealized R vs logged stop):")
@@ -87,16 +121,26 @@ def reconcile():
             mean = sum(rs) / len(rs); win = sum(r > 0 for r in rs) / len(rs)
             print("\n  " + "-" * 50)
             print(f"  REALIZED: {len(rs)} trades  win {win*100:.0f}%  mean R {mean:+.4f}")
-            print(f"  Expected (blind walk-forward): {EXPECTED_R:+.4f}R, ~57% win, Sharpe ~1.8")
+            print(f"  Expected (re-stated blind walk-forward): {EXPECTED_R:+.4f}R/trade")
             verdict = "ON TRACK" if mean >= EXPECTED_R * 0.5 else "BELOW EXPECTATION"
-            print(f"  -> {verdict}  ({'too few trades to judge' if len(rs) < 30 else 'meaningful sample'})")
+            judge = ("meaningful sample" if len(rs) >= MIN_MEANINGFUL_TRADES
+                     else "too few trades to judge")
+            print(f"  -> {verdict}  ({judge})")
     else:
         print("\n  No closed trades yet -- let the forward record accumulate.")
 
+    if strict and drift:
+        print("\n  STRICT MODE: drift detected -> exit 1")
+        return 1
+    return 0
+
 
 def main(argv=None):
-    reconcile()
-    return 0
+    p = argparse.ArgumentParser(description="Reconcile fills vs signal logs")
+    p.add_argument("--strict", action="store_true",
+                   help="exit non-zero on unmatched fills / orphan positions")
+    a = p.parse_args(argv)
+    return reconcile(strict=a.strict)
 
 
 if __name__ == "__main__":
