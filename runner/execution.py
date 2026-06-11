@@ -58,14 +58,19 @@ def _bars_since(symbol, kid, sec, entry_time) -> tuple[list[dict], float]:
     return bars, clock.minutes_to_close()
 
 
-def manage_exits(live: bool, get_entry_stop, state=None, cfg=None):
+def manage_exits(live: bool, get_entry_stop, state=None, cfg=None, symbols: set[str] | None = None):
     """For each open position, replay the intraday exit rules and submit sells.
     `get_entry_stop(symbol) -> (entry, stop, entry_time_iso, orig_qty)`.
     Pass `state`/`cfg` (RunnerState/RiskConfig) so full exits feed the
-    streak/cooldown gates via register_outcome."""
+    streak/cooldown gates via register_outcome. When `symbols` is set, only
+    manage those tickers (ignores swing-book positions on the same account)."""
     kid, sec, base = _creds()
     hdr = _headers(kid, sec)
     positions = requests.get(f"{base}/v2/positions", headers=hdr, timeout=20).json()
+    if symbols is not None:
+        positions = [p for p in positions if p["symbol"] in symbols]
+    if not positions:
+        return
     print(f"  EXITS ({'LIVE' if live else 'DRY-RUN'}):")
     for p in positions:
         sym, cur = p["symbol"], float(p["qty"])

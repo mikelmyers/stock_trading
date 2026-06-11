@@ -27,17 +27,35 @@ ENTRIES = Path(__file__).resolve().parent / "data" / "runner_entries.csv"
 
 
 def _broker_sync(state: RunnerState):
-    """Pull equity + open positions from the broker — the only numbers the
-    daily-loss and concurrency gates can be trusted to run on."""
+    """Sync open-position count from the broker for RUNNER trades only.
+
+    The paper account may also hold swing-book positions; counting those would
+    block the runner's max_concurrent gate. Virtual stake equity (e.g. $500 for
+    ep500) stays in state — not overwritten by total broker equity.
+    """
     import requests
     from training.alpaca_exec import _creds, _headers
     kid, sec, base = _creds()
     hdr = _headers(kid, sec)
-    acct = requests.get(f"{base}/v2/account", headers=hdr, timeout=20)
-    acct.raise_for_status()
     pos = requests.get(f"{base}/v2/positions", headers=hdr, timeout=20)
     pos.raise_for_status()
-    state.sync_with_broker(float(acct.json()["equity"]), len(pos.json()))
+    broker_pos = {p["symbol"]: p for p in pos.json()}
+    runner_syms: set[str] = set()
+    if ENTRIES.exists():
+        e = pd.read_csv(ENTRIES)
+        if "episode" in e.columns:
+            e = e[e["episode"] == state.episode_id]
+        runner_syms = set(e["symbol"].astype(str))
+    runner_open = sum(
+        1 for s in runner_syms
+        if s in broker_pos and float(broker_pos[s]["qty"]) > 0
+    )
+    state.open_positions = runner_open
+    if state.synced_date != state.date:
+        state.day_start_equity = state.equity
+        state.synced_date = state.date
+    state.daily_pnl = state.equity - state.day_start_equity
+    state.save()
 
 
 def _record_entry(episode, d, now_iso):
@@ -55,6 +73,16 @@ def _entry_resolver(symbol):
         return None
     r = e.iloc[-1]
     return (float(r["entry"]), float(r["stop"]), str(r["entry_time"]), float(r["qty"]))
+
+
+def _runner_symbols(episode: str) -> set[str]:
+    """Symbols the runner episode has entered — excludes swing-book ETFs."""
+    if not ENTRIES.exists():
+        return set()
+    e = pd.read_csv(ENTRIES)
+    if "episode" in e.columns:
+        e = e[e["episode"] == episode]
+    return set(e["symbol"].astype(str))
 
 
 def cycle(mock: bool, live: bool, equity: float, leverage: float, episode: str):
@@ -77,7 +105,8 @@ def cycle(mock: bool, live: bool, equity: float, leverage: float, episode: str):
         print("  (mock: skipping live exit management)")
     else:
         from runner import execution
-        execution.manage_exits(live, _entry_resolver, state=state, cfg=cfg)
+        execution.manage_exits(live, _entry_resolver, state=state, cfg=cfg,
+                              symbols=_runner_symbols(episode))
 
     # 2) scan + size — evaluate ONCE per candidate, and count provisional takes
     #    against the caps so a single scan can't blow through max_concurrent /
@@ -98,8 +127,11 @@ def cycle(mock: bool, live: bool, equity: float, leverage: float, episode: str):
         flag = "TAKE" if d.action == "take" else "skip"
         print(f"    {c.symbol:<6} {flag:<5} {d.shares:>4}sh @ {c.price:<7.2f} stop {d.stop or 0:<7.2f} {d.reason}")
 
-    # 3) log the whole pool (the classifier's future training data)
-    RunnerLog(episode).log_candidates(cands, {s: d.action for s, d in decisions.items()})
+    # 3) log the whole scanned pool — incl. near-misses when candidates=0
+    dec_map = {s: d.action for s, d in decisions.items()}
+    for cv in cvs:
+        dec_map.setdefault(cv.symbol, "pass")
+    RunnerLog(episode).log_candidates(cvs, dec_map)
 
     # 4) submit entries — only broker-ACCEPTED orders update state/the ledger
     if takes and not mock:

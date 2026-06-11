@@ -14,6 +14,36 @@ from typing import Callable, Optional
 from runner import conditions as C
 
 
+def _avg_vol_20d(daily_bars: list, prev_daily: dict) -> Optional[float]:
+    """20-day average volume from prior daily bars.
+
+    New/low-history runners often return only today's bar from Alpaca; the old
+    ``sum(prior)/max(len(prior),1)`` path produced 0 and killed rvol for every
+    gainer. Fall back to yesterday's bar when no prior history exists.
+    """
+    prior = daily_bars[:-1] if daily_bars else []
+    if prior:
+        return sum(b["v"] for b in prior) / len(prior)
+    if prev_daily.get("v"):
+        return float(prev_daily["v"])
+    return None
+
+
+def _intraday_vol(bars: list) -> Optional[float]:
+    if not bars:
+        return None
+    return float(sum(b["v"] for b in bars))
+
+
+def _is_warrant_or_unit(symbol: str) -> bool:
+    """Skip warrant/unit tickers from the movers screener (not runner setups)."""
+    sym = symbol.upper()
+    if "." in sym:
+        return True
+    # Screener units: SPKLW, DAICW, etc. (5+ chars ending in W)
+    return len(sym) >= 5 and sym.endswith("W")
+
+
 def _build_cv(symbol: str, raw: dict, minutes_since_open: float, regime: str | None):
     bars = raw.get("bars") or []
     price, prev_close, day_open = raw.get("price"), raw.get("prev_close"), raw.get("day_open")
@@ -138,7 +168,13 @@ class AlpacaSource(DataSource):
 
     def movers(self):
         j = self._get(f"{self.DATA}/v1beta1/screener/stocks/movers", top=self.top_n)
-        return [m["symbol"] for m in j.get("gainers", [])]
+        out = []
+        for m in j.get("gainers", []):
+            sym = m["symbol"]
+            if _is_warrant_or_unit(sym):
+                continue
+            out.append(sym)
+        return out
 
     def snapshot(self, symbol):
         import datetime as dt
@@ -148,10 +184,14 @@ class AlpacaSource(DataSource):
         trade = snap.get("latestTrade", {})
         daily = self._get(f"{self.DATA}/v2/stocks/{symbol}/bars",
                           timeframe="1Day", limit=21).get("bars", [])
-        avg20 = sum(b["v"] for b in daily[:-1]) / max(len(daily) - 1, 1) if daily else None
+        avg20 = _avg_vol_20d(daily, prev)
         mins = self._get(f"{self.DATA}/v2/stocks/{symbol}/bars",
-                         timeframe="1Min", limit=60).get("bars", [])
-        news = self._get(f"{self.DATA}/v1beta1/news", symbols=symbol, limit=5).get("news", [])
+                         timeframe="1Min", limit=390).get("bars", [])
+        news = self._get(f"{self.DATA}/v1beta1/news", symbols=symbol, limit=5).get("news") or []
+        vol_today = day.get("v")
+        intraday = _intraday_vol(mins)
+        if intraday and intraday > (vol_today or 0):
+            vol_today = intraday
         # asof = the SCAN time. dailyBar.t is the bar's 4am open timestamp,
         # constant all day — using it made the labeler measure MFE over
         # midnight-2am and collapsed every intraday scan to one row.
@@ -159,7 +199,7 @@ class AlpacaSource(DataSource):
         return dict(
             asof=dt.datetime.now(dt.timezone.utc).isoformat(),
             price=trade.get("p") or day.get("c"), prev_close=prev.get("c"),
-            day_open=day.get("o"), vol_today=day.get("v"), avg_vol_20d=avg20,
+            day_open=day.get("o"), vol_today=vol_today, avg_vol_20d=avg20,
             float_shares=self.float_provider(symbol), bid=q.get("bp"), ask=q.get("ap"),
             news=news, catalyst_type=_catalyst_type(news), halts_today=None,
             pm_high=None, pm_low=None,
